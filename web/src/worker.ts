@@ -130,7 +130,8 @@ async function initWasm(): Promise<void> {
     postMessage({ type: 'status', payload: 'Initializing WASM module...' });
 
     // Dynamic import of the WASM module
-    const wasmModule = (await import('./pkg/smollm2_wasm.js')) as SmolLM2Wasm;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const wasmModule = (await import('./pkg/smollm2_wasm.js')) as unknown as SmolLM2Wasm;
     await wasmModule.default();
     wasmModule.init_panic_hook();
 

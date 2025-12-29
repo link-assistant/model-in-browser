@@ -52,10 +52,15 @@ codegen-units = 1
 strip = true
 
 # Configure wasm-opt to enable required WASM features
-# Required since Rust 1.87 / LLVM 20 generates bulk memory ops by default
-# SIMD is used by candle for optimized tensor operations
+# Required since Rust 1.87+ / LLVM 20 generates modern WASM features by default:
+# - bulk-memory: For memory.copy, memory.fill operations
+# - mutable-globals: For mutable global variables
+# - simd: For SIMD vector operations (used by candle)
+# - nontrapping-float-to-int: For saturating float conversions (i32.trunc_sat_*)
+# - sign-ext: For sign extension operations
+# - reference-types: For reference type operations
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-O", "--enable-bulk-memory", "--enable-mutable-globals", "--enable-simd"]
+wasm-opt = ["-O", "--enable-bulk-memory", "--enable-mutable-globals", "--enable-simd", "--enable-nontrapping-float-to-int", "--enable-sign-ext", "--enable-reference-types"]
 
 [package.metadata.wasm-pack.profile.dev]
 wasm-opt = false

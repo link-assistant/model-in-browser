@@ -1,6 +1,7 @@
-//! Example module entry point.
+//! Browser-based LLM inference library using `SmolLM2` and WebAssembly.
 //!
-//! Replace this with your actual implementation.
+//! This crate provides utilities for running the `SmolLM2` language model
+//! directly in web browsers via WebAssembly, with no server-side processing.
 
 /// Package version (matches Cargo.toml version).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -19,7 +20,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// # Examples
 ///
 /// ```
-/// use my_package::add;
+/// use model_in_browser::add;
 /// assert_eq!(add(2, 3), 5);
 /// ```
 #[must_use]
@@ -41,7 +42,7 @@ pub const fn add(a: i64, b: i64) -> i64 {
 /// # Examples
 ///
 /// ```
-/// use my_package::multiply;
+/// use model_in_browser::multiply;
 /// assert_eq!(multiply(2, 3), 6);
 /// ```
 #[must_use]
@@ -58,7 +59,7 @@ pub const fn multiply(a: i64, b: i64) -> i64 {
 /// # Examples
 ///
 /// ```
-/// use my_package::delay;
+/// use model_in_browser::delay;
 ///
 /// #[tokio::main]
 /// async fn main() {

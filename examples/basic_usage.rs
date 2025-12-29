@@ -1,10 +1,10 @@
-//! Basic usage example for my-package.
+//! Basic usage example for model-in-browser.
 //!
 //! This example demonstrates the basic functionality of the package.
 //!
 //! Run with: `cargo run --example basic_usage`
 
-use my_package::{add, delay, multiply};
+use model_in_browser::{add, delay, multiply};
 
 #[tokio::main]
 async fn main() {

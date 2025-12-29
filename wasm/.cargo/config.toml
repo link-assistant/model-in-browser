@@ -1,0 +1,8 @@
+# Configuration for building the WASM package
+# This is required for getrandom to work on wasm32-unknown-unknown target
+
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+
+[build]
+target = "wasm32-unknown-unknown"

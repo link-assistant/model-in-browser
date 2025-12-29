@@ -51,6 +51,14 @@ opt-level = "z"
 codegen-units = 1
 strip = true
 
+# Configure wasm-opt to enable bulk-memory operations
+# Required since Rust 1.87 / LLVM 20 generates bulk memory ops by default
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O", "--enable-bulk-memory", "--enable-mutable-globals"]
+
+[package.metadata.wasm-pack.profile.dev]
+wasm-opt = false
+
 [lints.rust]
 unsafe_code = "warn"
 

@@ -51,10 +51,11 @@ opt-level = "z"
 codegen-units = 1
 strip = true
 
-# Configure wasm-opt to enable bulk-memory operations
+# Configure wasm-opt to enable required WASM features
 # Required since Rust 1.87 / LLVM 20 generates bulk memory ops by default
+# SIMD is used by candle for optimized tensor operations
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-O", "--enable-bulk-memory", "--enable-mutable-globals"]
+wasm-opt = ["-O", "--enable-bulk-memory", "--enable-mutable-globals", "--enable-simd"]
 
 [package.metadata.wasm-pack.profile.dev]
 wasm-opt = false

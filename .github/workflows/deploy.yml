@@ -59,7 +59,7 @@ jobs:
 
       - name: Build WASM package
         env:
-          RUSTFLAGS: '--cfg getrandom_backend="wasm_js" -C target-feature=+bulk-memory,+mutable-globals'
+          RUSTFLAGS: '--cfg getrandom_backend="wasm_js" -C target-feature=+bulk-memory,+mutable-globals,+simd128'
         run: |
           cd wasm
           wasm-pack build --target web --out-dir ../web/src/pkg

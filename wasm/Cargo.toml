@@ -31,7 +31,8 @@ console_error_panic_hook = "0.1"
 # Random number generation for WASM
 # getrandom 0.2.x is used by some dependencies, 0.3.x by others
 # Both need JS feature enabled for wasm32-unknown-unknown
-getrandom = { version = "0.2", features = ["js"] }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 # Candle ML framework
 candle-core = { version = "0.8", default-features = false }

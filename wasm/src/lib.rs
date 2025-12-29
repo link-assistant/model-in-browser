@@ -6,7 +6,7 @@
 use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use candle_transformers::models::llama::{Config, Llama, LlamaConfig};
+use candle_transformers::models::llama::{Cache, Config, Llama, LlamaConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tokenizers::Tokenizer;
@@ -24,11 +24,6 @@ extern "C" {
 /// Macro for console logging in WASM context.
 macro_rules! console_log {
     ($($t:tt)*) => (log(&format!($($t)*)))
-}
-
-/// Macro for console error logging in WASM context.
-macro_rules! console_error {
-    ($($t:tt)*) => (error(&format!($($t)*)))
 }
 
 /// Generation parameters for text completion.
@@ -62,12 +57,12 @@ impl Default for GenerationParams {
 }
 
 /// SmolLM2 model wrapper for WASM.
-#[wasm_bindgen]
 pub struct SmolLM2Model {
     model: Llama,
     tokenizer: Tokenizer,
     config: Config,
     device: Device,
+    cache: Cache,
 }
 
 /// Static model storage for the worker context.
@@ -138,12 +133,17 @@ pub async fn load_model(
 
     console_log!("SmolLM2: Model built successfully");
 
+    // Create KV cache for efficient generation
+    let cache = Cache::new(true, candle_core::DType::F32, &config, &device)
+        .map_err(|e| JsValue::from_str(&format!("Failed to create cache: {}", e)))?;
+
     // Store model in global state
     let smol_model = SmolLM2Model {
         model,
         tokenizer,
         config,
         device,
+        cache,
     };
 
     *MODEL
@@ -196,7 +196,7 @@ pub async fn generate(
         .encode(prompt, true)
         .map_err(|e| JsValue::from_str(&format!("Tokenization failed: {}", e)))?;
 
-    let mut tokens: Vec<u32> = encoding.get_ids().to_vec();
+    let tokens: Vec<u32> = encoding.get_ids().to_vec();
     let prompt_len = tokens.len();
 
     console_log!("SmolLM2: Prompt tokenized to {} tokens", prompt_len);
@@ -227,18 +227,23 @@ pub async fn generate(
             .unsqueeze(0)
             .map_err(|e| JsValue::from_str(&format!("Failed to unsqueeze: {}", e)))?;
 
-        // Forward pass
+        // Forward pass with cache
         let logits = model_wrapper
             .model
-            .forward(&input_tensor, start_pos)
+            .forward(&input_tensor, start_pos, &mut model_wrapper.cache)
             .map_err(|e| JsValue::from_str(&format!("Forward pass failed: {}", e)))?;
 
         // Get logits for next token prediction
         let logits = logits
             .squeeze(0)
             .map_err(|e| JsValue::from_str(&format!("Squeeze failed: {}", e)))?;
+
+        let seq_len = logits
+            .dim(0)
+            .map_err(|e| JsValue::from_str(&format!("Failed to get dim: {}", e)))?;
+
         let logits = logits
-            .get(logits.dim(0)? - 1)
+            .get(seq_len - 1)
             .map_err(|e| JsValue::from_str(&format!("Get logits failed: {}", e)))?;
 
         // Apply repeat penalty

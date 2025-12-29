@@ -58,6 +58,8 @@ jobs:
             ${{ runner.os }}-npm-
 
       - name: Build WASM package
+        env:
+          RUSTFLAGS: '--cfg getrandom_backend="wasm_js" -C target-feature=+bulk-memory,+mutable-globals'
         run: |
           cd wasm
           wasm-pack build --target web --out-dir ../web/src/pkg

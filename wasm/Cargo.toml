@@ -1,3 +1,7 @@
+# This package is intentionally NOT part of the parent workspace
+# because it requires the wasm32-unknown-unknown target
+[workspace]
+
 [package]
 name = "smollm2-wasm"
 version = "0.1.0"

@@ -2,7 +2,10 @@
 # This is required for getrandom to work on wasm32-unknown-unknown target
 
 [target.wasm32-unknown-unknown]
-rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+rustflags = [
+    '--cfg', 'getrandom_backend="wasm_js"',
+    '-C', 'target-feature=+bulk-memory,+mutable-globals'
+]
 
 [build]
 target = "wasm32-unknown-unknown"

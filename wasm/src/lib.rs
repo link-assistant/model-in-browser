@@ -60,7 +60,8 @@ impl Default for GenerationParams {
 pub struct SmolLM2Model {
     model: Llama,
     tokenizer: Tokenizer,
-    config: Config,
+    /// Model configuration, stored for potential future use (model introspection, cache reset, etc.)
+    _config: Config,
     device: Device,
     cache: Cache,
 }
@@ -141,7 +142,7 @@ pub async fn load_model(
     let smol_model = SmolLM2Model {
         model,
         tokenizer,
-        config,
+        _config: config,
         device,
         cache,
     };

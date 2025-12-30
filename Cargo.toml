@@ -1,22 +1,29 @@
+[workspace]
+members = [".", "server"]
+# Note: "wasm" is excluded from workspace as it requires wasm32 target
+# Build it separately with: cd wasm && wasm-pack build --target web
+exclude = ["wasm"]
+resolver = "2"
+
 [package]
-name = "my-package"
+name = "model-in-browser"
 version = "0.1.0"
 edition = "2021"
-description = "A Rust package template for AI-driven development"
+description = "Browser-based LLM inference using SmolLM2 and WebAssembly"
 readme = "README.md"
 license = "Unlicense"
-keywords = ["template", "rust", "ai-driven"]
-categories = ["development-tools"]
-repository = "https://github.com/link-foundation/rust-ai-driven-development-pipeline-template"
-documentation = "https://github.com/link-foundation/rust-ai-driven-development-pipeline-template"
+keywords = ["llm", "wasm", "browser", "smollm2", "ai"]
+categories = ["wasm", "web-programming"]
+repository = "https://github.com/link-assistant/model-in-browser"
+documentation = "https://github.com/link-assistant/model-in-browser"
 rust-version = "1.70"
 
 [lib]
-name = "my_package"
+name = "model_in_browser"
 path = "src/lib.rs"
 
 [[bin]]
-name = "my-package"
+name = "model-in-browser"
 path = "src/main.rs"
 
 [dependencies]

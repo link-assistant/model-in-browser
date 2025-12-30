@@ -1,29 +1,33 @@
-//! Example binary entry point.
+//! CLI for the browser-based LLM project.
 //!
-//! This is a simple CLI that demonstrates the library functionality.
+//! This binary provides information about the project and can be used
+//! for local testing.
 
-use my_package::{add, delay, multiply};
+use model_in_browser::{add, delay, multiply};
 
 #[tokio::main]
 async fn main() {
-    println!("my-package v{}", my_package::VERSION);
+    println!("Model in Browser v{}", model_in_browser::VERSION);
+    println!();
+    println!("This project enables running SmolLM2 language model");
+    println!("directly in web browsers via WebAssembly.");
     println!();
 
-    // Example 1: Basic arithmetic
-    println!("Example 1: Basic arithmetic");
-    println!("2 + 3 = {}", add(2, 3));
-    println!("2 * 3 = {}", multiply(2, 3));
+    // Quick functionality test
+    println!("Quick self-test:");
+    println!("  2 + 3 = {}", add(2, 3));
+    println!("  2 * 3 = {}", multiply(2, 3));
     println!();
 
-    // Example 2: Working with larger numbers
-    println!("Example 2: Working with larger numbers");
-    println!("1000 + 2000 = {}", add(1000, 2000));
-    println!("100 * 200 = {}", multiply(100, 200));
+    println!("Testing async functionality...");
+    delay(0.5).await;
+    println!("Async test complete!");
     println!();
 
-    // Example 3: Async delay
-    println!("Example 3: Async delay");
-    println!("Waiting for 1 second...");
-    delay(1.0).await;
-    println!("Done!");
+    println!("To start the web application:");
+    println!("  1. Build the WASM package: ./scripts/build-wasm.sh");
+    println!("  2. Start the dev server:   cd web && npm run dev");
+    println!();
+    println!("For the production server:");
+    println!("  cargo run --manifest-path server/Cargo.toml");
 }

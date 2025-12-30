@@ -54,3 +54,19 @@ doc/
 # Log files
 *.log
 logs/
+
+# Node.js / Web
+node_modules/
+web/node_modules/
+web/dist/
+web/src/pkg/
+.npm
+npm-debug.log*
+
+# WASM build artifacts
+wasm/pkg/
+wasm/target/
+*.wasm
+
+# Server build artifacts
+server/target/

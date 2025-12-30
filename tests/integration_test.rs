@@ -1,8 +1,8 @@
-//! Integration tests for my-package.
+//! Integration tests for model-in-browser.
 //!
 //! These tests verify the public API works correctly.
 
-use my_package::{add, delay, multiply};
+use model_in_browser::{add, delay, multiply};
 
 mod add_integration_tests {
     use super::*;
@@ -73,7 +73,7 @@ mod delay_integration_tests {
 }
 
 mod version_tests {
-    use my_package::VERSION;
+    use model_in_browser::VERSION;
 
     #[test]
     fn test_version_is_not_empty() {

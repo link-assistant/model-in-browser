@@ -15,16 +15,12 @@ import { test, expect } from '@playwright/test';
  */
 
 test.describe('SmolLM2 Browser Inference', () => {
-  test.beforeEach(async ({ page }) => {
-    // Navigate to the app
-    await page.goto('/');
-
-    // Verify initial state
-    await expect(page.getByRole('heading', { name: 'SmolLM2 in Browser' })).toBeVisible();
-    await expect(page.getByText('Model not loaded')).toBeVisible();
-  });
+  // Run tests serially since they share model state
+  test.describe.configure({ mode: 'serial' });
 
   test('should display initial UI correctly', async ({ page }) => {
+    await page.goto('/');
+
     // Check header
     await expect(page.getByRole('heading', { name: 'SmolLM2 in Browser' })).toBeVisible();
     await expect(
@@ -42,9 +38,17 @@ test.describe('SmolLM2 Browser Inference', () => {
 
     // Check footer info
     await expect(page.getByText(/No data sent to servers/)).toBeVisible();
+
+    // Check initial status
+    await expect(page.getByText('Model not loaded')).toBeVisible();
   });
 
   test('should load model successfully', async ({ page }) => {
+    await page.goto('/');
+
+    // Verify initial state
+    await expect(page.getByRole('button', { name: /Load Model/i })).toBeVisible();
+
     // Click load button
     await page.getByRole('button', { name: /Load Model/i }).click();
 
@@ -66,18 +70,20 @@ test.describe('SmolLM2 Browser Inference', () => {
   });
 
   test('should generate text response without errors', async ({ page }) => {
-    // Load the model first
-    await page.getByRole('button', { name: /Load Model/i }).click();
-    await expect(page.getByText('Model ready')).toBeVisible({
-      timeout: 5 * 60 * 1000,
-    });
+    await page.goto('/');
 
-    // Listen for console errors
+    // Listen for console errors from the start
     const consoleErrors: string[] = [];
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
         consoleErrors.push(msg.text());
       }
+    });
+
+    // Load the model first
+    await page.getByRole('button', { name: /Load Model/i }).click();
+    await expect(page.getByText('Model ready')).toBeVisible({
+      timeout: 5 * 60 * 1000,
     });
 
     // Send a message
@@ -111,19 +117,12 @@ test.describe('SmolLM2 Browser Inference', () => {
   });
 
   test('should stream tokens to the UI', async ({ page }) => {
+    await page.goto('/');
+
     // Load the model first
     await page.getByRole('button', { name: /Load Model/i }).click();
     await expect(page.getByText('Model ready')).toBeVisible({
       timeout: 5 * 60 * 1000,
-    });
-
-    // Track token events
-    let tokenCount = 0;
-    page.on('console', (msg) => {
-      // The worker posts 'token' messages which get logged
-      if (msg.text().includes('SmolLM2') && msg.type() === 'log') {
-        tokenCount++;
-      }
     });
 
     // Send a message

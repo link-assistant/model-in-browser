@@ -235,17 +235,11 @@ pub async fn generate(
             .map_err(|e| JsValue::from_str(&format!("Forward pass failed: {}", e)))?;
 
         // Get logits for next token prediction
+        // The Llama model already extracts the last position internally,
+        // so the output shape is [batch_size, vocab_size], not [batch_size, seq_len, vocab_size]
         let logits = logits
             .squeeze(0)
             .map_err(|e| JsValue::from_str(&format!("Squeeze failed: {}", e)))?;
-
-        let seq_len = logits
-            .dim(0)
-            .map_err(|e| JsValue::from_str(&format!("Failed to get dim: {}", e)))?;
-
-        let logits = logits
-            .get(seq_len - 1)
-            .map_err(|e| JsValue::from_str(&format!("Get logits failed: {}", e)))?;
 
         // Apply repeat penalty
         let logits = if params.repeat_penalty != 1.0 {

@@ -43,7 +43,7 @@ function App() {
     },
   ]);
   const [status, setStatus] = useState<ModelStatus>('idle');
-  const [statusText, setStatusText] = useState('Model not loaded');
+  const [statusText, setStatusText] = useState('Initializing...');
   const [isTyping, setIsTyping] = useState(false);
   const [progress, setProgress] = useState<ProgressInfo | null>(null);
 

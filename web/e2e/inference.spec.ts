@@ -39,8 +39,8 @@ test.describe('SmolLM2 Browser Inference', () => {
     // Check footer info
     await expect(page.getByText(/No data sent to servers/)).toBeVisible();
 
-    // Check initial status
-    await expect(page.getByText('Model not loaded')).toBeVisible();
+    // Check initial status - worker sends 'Worker initialized' on startup
+    await expect(page.getByText('Worker initialized')).toBeVisible();
   });
 
   test('should load model successfully', async ({ page }) => {

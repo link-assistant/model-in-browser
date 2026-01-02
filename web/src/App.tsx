@@ -94,6 +94,7 @@ function App() {
             setProgress(null);
           } else if (action === 'generate') {
             setIsTyping(false);
+            setStatusText('Model ready');
           }
           break;
         }

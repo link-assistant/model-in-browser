@@ -63,6 +63,11 @@ web/src/pkg/
 .npm
 npm-debug.log*
 
+# Playwright
+web/playwright-report/
+web/test-results/
+web/playwright/.cache/
+
 # WASM build artifacts
 wasm/pkg/
 wasm/target/

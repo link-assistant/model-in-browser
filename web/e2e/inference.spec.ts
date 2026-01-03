@@ -4,9 +4,10 @@ import { test, expect } from '@playwright/test';
  * E2E tests for SmolLM2 browser inference.
  *
  * These tests verify that the WASM-based language model can:
- * 1. Load successfully in the browser
+ * 1. Load successfully in the browser (automatic download)
  * 2. Generate text responses without errors
  * 3. Stream tokens back to the UI
+ * 4. Handle multiple consecutive messages without errors
  *
  * Note: These tests require significant time due to:
  * - Model download (~270MB)
@@ -27,11 +28,7 @@ test.describe('SmolLM2 Browser Inference', () => {
       page.getByText('AI language model running entirely on your device via WebAssembly')
     ).toBeVisible();
 
-    // Check load button
-    await expect(page.getByRole('button', { name: /Load Model/i })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Load Model/i })).toBeEnabled();
-
-    // Check initial message
+    // Check initial message (updated for automatic loading)
     await expect(
       page.getByText(/Hello! I'm SmolLM2, a small language model running entirely in your browser/)
     ).toBeVisible();
@@ -39,21 +36,17 @@ test.describe('SmolLM2 Browser Inference', () => {
     // Check footer info
     await expect(page.getByText(/No data sent to servers/)).toBeVisible();
 
-    // Check initial status - worker sends 'Worker initialized' on startup
-    await expect(page.getByText('Worker initialized')).toBeVisible();
+    // Model should start auto-loading - check for loading indicators
+    await expect(page.getByText(/Initializing|Starting automatic download|Downloading/i)).toBeVisible({
+      timeout: 10000,
+    });
   });
 
-  test('should load model successfully', async ({ page }) => {
+  test('should load model automatically without button click', async ({ page }) => {
     await page.goto('/');
 
-    // Verify initial state
-    await expect(page.getByRole('button', { name: /Load Model/i })).toBeVisible();
-
-    // Click load button
-    await page.getByRole('button', { name: /Load Model/i }).click();
-
-    // Should show loading status
-    await expect(page.getByText(/Initializing|Downloading|Loading/i)).toBeVisible({
+    // Should show loading status automatically (no button click needed)
+    await expect(page.getByText(/Initializing|Starting automatic download|Downloading|Loading/i)).toBeVisible({
       timeout: 10000,
     });
 
@@ -61,9 +54,6 @@ test.describe('SmolLM2 Browser Inference', () => {
     await expect(page.getByText('Model ready')).toBeVisible({
       timeout: 5 * 60 * 1000, // 5 minutes
     });
-
-    // Load button should be gone
-    await expect(page.getByRole('button', { name: /Load Model/i })).not.toBeVisible();
 
     // Message input should be enabled
     await expect(page.locator('.cs-message-input__content-editor')).toBeEnabled();
@@ -80,8 +70,7 @@ test.describe('SmolLM2 Browser Inference', () => {
       }
     });
 
-    // Load the model first
-    await page.getByRole('button', { name: /Load Model/i }).click();
+    // Wait for model to auto-load
     await expect(page.getByText('Model ready')).toBeVisible({
       timeout: 5 * 60 * 1000,
     });
@@ -119,8 +108,7 @@ test.describe('SmolLM2 Browser Inference', () => {
   test('should stream tokens to the UI', async ({ page }) => {
     await page.goto('/');
 
-    // Load the model first
-    await page.getByRole('button', { name: /Load Model/i }).click();
+    // Wait for model to auto-load
     await expect(page.getByText('Model ready')).toBeVisible({
       timeout: 5 * 60 * 1000,
     });
@@ -140,17 +128,90 @@ test.describe('SmolLM2 Browser Inference', () => {
     const aiMessages = page.locator('[class*="cs-message--incoming"]');
     await expect(aiMessages).toHaveCount(2, { timeout: 5000 });
   });
+
+  test('should handle multiple consecutive messages without errors (issue #7)', async ({ page }) => {
+    await page.goto('/');
+
+    // Listen for console errors from the start - this is crucial for detecting the broadcast error
+    const consoleErrors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') {
+        consoleErrors.push(msg.text());
+      }
+    });
+
+    // Wait for model to auto-load
+    await expect(page.getByText('Model ready')).toBeVisible({
+      timeout: 5 * 60 * 1000,
+    });
+
+    const messageInput = page.locator('.cs-message-input__content-editor');
+
+    // Send FIRST message
+    await messageInput.fill('Say hello');
+    await messageInput.press('Enter');
+
+    // Wait for first generation to complete
+    await expect(page.getByText('SmolLM2 is thinking...')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('SmolLM2 is thinking...')).not.toBeVisible({
+      timeout: 2 * 60 * 1000,
+    });
+
+    // Verify no errors after first message
+    await expect(page.getByText(/Error:/i)).not.toBeVisible();
+    await expect(page.getByText('Model ready')).toBeVisible();
+
+    // Send SECOND message - this is where the original bug occurred
+    await messageInput.fill('Say goodbye');
+    await messageInput.press('Enter');
+
+    // Wait for second generation to complete
+    await expect(page.getByText('SmolLM2 is thinking...')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('SmolLM2 is thinking...')).not.toBeVisible({
+      timeout: 2 * 60 * 1000,
+    });
+
+    // Check for the broadcast error that was the root cause of issue #7
+    const broadcastError = consoleErrors.find((e) =>
+      e.includes('cannot broadcast') || e.includes('Forward pass failed')
+    );
+    expect(broadcastError).toBeUndefined();
+
+    // Verify no errors after second message
+    await expect(page.getByText(/Error:/i)).not.toBeVisible();
+    await expect(page.getByText('Model ready')).toBeVisible();
+
+    // Send THIRD message to ensure continued stability
+    await messageInput.fill('How are you?');
+    await messageInput.press('Enter');
+
+    // Wait for third generation to complete
+    await expect(page.getByText('SmolLM2 is thinking...')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('SmolLM2 is thinking...')).not.toBeVisible({
+      timeout: 2 * 60 * 1000,
+    });
+
+    // Final verification - no errors after three consecutive messages
+    const anyBroadcastError = consoleErrors.find((e) =>
+      e.includes('cannot broadcast') || e.includes('Forward pass failed')
+    );
+    expect(anyBroadcastError).toBeUndefined();
+
+    await expect(page.getByText(/Error:/i)).not.toBeVisible();
+    await expect(page.getByText('Model ready')).toBeVisible();
+
+    // There should be 4 AI response regions (initial greeting + 3 responses)
+    const aiMessages = page.locator('[class*="cs-message--incoming"]');
+    await expect(aiMessages).toHaveCount(4, { timeout: 5000 });
+  });
 });
 
 test.describe('Error Handling', () => {
   test('should handle model loading gracefully', async ({ page }) => {
     await page.goto('/');
 
-    // Click load button
-    await page.getByRole('button', { name: /Load Model/i }).click();
-
-    // Should not crash immediately
-    await expect(page.getByText(/Initializing|Downloading/i)).toBeVisible({
+    // Model starts loading automatically
+    await expect(page.getByText(/Initializing|Starting automatic download|Downloading/i)).toBeVisible({
       timeout: 10000,
     });
 

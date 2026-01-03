@@ -60,8 +60,8 @@ impl Default for GenerationParams {
 pub struct SmolLM2Model {
     model: Llama,
     tokenizer: Tokenizer,
-    /// Model configuration, stored for potential future use (model introspection, cache reset, etc.)
-    _config: Config,
+    /// Model configuration, stored for cache reset between generations.
+    config: Config,
     device: Device,
     cache: Cache,
 }
@@ -142,7 +142,7 @@ pub async fn load_model(
     let smol_model = SmolLM2Model {
         model,
         tokenizer,
-        _config: config,
+        config,
         device,
         cache,
     };
@@ -191,6 +191,14 @@ pub async fn generate(
         .as_mut()
         .ok_or_else(|| JsValue::from_str("Model not loaded"))?;
 
+    // Reset KV cache for new generation to avoid dimension mismatches
+    // Each generate() call is a fresh conversation, so we need a clean cache
+    model_wrapper.cache =
+        Cache::new(true, candle_core::DType::F32, &model_wrapper.config, &model_wrapper.device)
+            .map_err(|e| JsValue::from_str(&format!("Failed to reset cache: {}", e)))?;
+
+    console_log!("SmolLM2: Cache reset for new generation");
+
     // Tokenize the prompt
     let encoding = model_wrapper
         .tokenizer
@@ -209,12 +217,18 @@ pub async fn generate(
     let mut generated_text = String::new();
     let mut all_tokens = tokens.clone();
 
-    // Get EOS token ID
-    let eos_token_id = model_wrapper
-        .tokenizer
-        .token_to_id("</s>")
-        .or_else(|| model_wrapper.tokenizer.token_to_id("<|endoftext|>"))
-        .unwrap_or(2);
+    // Get EOS token IDs - SmolLM2 uses ChatML format with <|im_end|> as the stop token
+    let eos_token_ids: Vec<u32> = [
+        "<|im_end|>",    // ChatML end token (primary for SmolLM2-Instruct)
+        "<|endoftext|>", // Standard end of text token
+        "</s>",          // Standard EOS token
+    ]
+    .iter()
+    .filter_map(|token| model_wrapper.tokenizer.token_to_id(token))
+    .collect();
+
+    // Fallback to token ID 2 if no EOS tokens found
+    let has_eos_tokens = !eos_token_ids.is_empty();
 
     // Generation loop
     for i in 0..params.max_tokens {
@@ -259,16 +273,31 @@ pub async fn generate(
             .sample(&logits)
             .map_err(|e| JsValue::from_str(&format!("Sampling failed: {}", e)))?;
 
-        // Check for EOS
-        if next_token == eos_token_id {
-            console_log!("SmolLM2: EOS token reached");
+        // Check for EOS tokens (including <|im_end|> for ChatML format)
+        let is_eos = if has_eos_tokens {
+            eos_token_ids.contains(&next_token)
+        } else {
+            next_token == 2 // Fallback EOS token ID
+        };
+
+        if is_eos {
+            console_log!("SmolLM2: EOS token reached (token_id={})", next_token);
             break;
         }
 
         all_tokens.push(next_token);
 
-        // Decode the new token
-        if let Ok(text) = model_wrapper.tokenizer.decode(&[next_token], false) {
+        // Decode the new token, skipping special tokens
+        if let Ok(text) = model_wrapper.tokenizer.decode(&[next_token], true) {
+            // Skip empty tokens or special token markers that might leak through
+            if text.is_empty()
+                || text.contains("<|im_start|>")
+                || text.contains("<|im_end|>")
+                || text.contains("<|endoftext|>")
+            {
+                continue;
+            }
+
             generated_text.push_str(&text);
 
             // Call the callback with the new token

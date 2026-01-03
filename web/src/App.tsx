@@ -35,7 +35,7 @@ function App() {
   const [messages, setMessages] = useState<MessageModel[]>([
     {
       message:
-        "Hello! I'm SmolLM2, a small language model running entirely in your browser. Load me to start chatting!",
+        "Hello! I'm SmolLM2, a small language model running entirely in your browser. The model is downloading automatically - you can start chatting once it's ready!",
       sentTime: 'just now',
       sender: 'SmolLM2',
       direction: 'incoming',
@@ -50,7 +50,10 @@ function App() {
   const workerRef = useRef<Worker | null>(null);
   const currentResponseRef = useRef<string>('');
 
-  // Initialize the worker
+  // Track if auto-load has been triggered
+  const autoLoadTriggeredRef = useRef(false);
+
+  // Initialize the worker and automatically start model download
   useEffect(() => {
     // Create worker from worker.ts
     const worker = new Worker(new URL('./worker.ts', import.meta.url), {
@@ -63,6 +66,23 @@ function App() {
       switch (type) {
         case 'status':
           setStatusText(payload as string);
+          // Automatically start model loading when worker is initialized
+          if (payload === 'Worker initialized' && !autoLoadTriggeredRef.current) {
+            autoLoadTriggeredRef.current = true;
+            // Use setTimeout to ensure state is updated before loading
+            setTimeout(() => {
+              if (workerRef.current) {
+                setStatus('loading');
+                setStatusText('Starting automatic download...');
+                const loadPayload: LoadPayload = {
+                  modelUrl: MODEL_CONFIG.modelUrl,
+                  tokenizerUrl: MODEL_CONFIG.tokenizerUrl,
+                  configUrl: MODEL_CONFIG.configUrl,
+                };
+                workerRef.current.postMessage({ type: 'load', payload: loadPayload });
+              }
+            }, 100);
+          }
           break;
 
         case 'progress':
@@ -198,9 +218,9 @@ function App() {
       <div className="status-bar">
         <div className={`status-indicator ${getStatusIndicatorClass()}`} />
         <span>{statusText}</span>
-        {status === 'idle' && (
+        {status === 'error' && (
           <button className="load-button" onClick={handleLoadModel}>
-            Load Model (~270MB)
+            Retry Load
           </button>
         )}
       </div>
@@ -232,7 +252,9 @@ function App() {
               placeholder={
                 status === 'ready'
                   ? 'Type your message...'
-                  : 'Load the model first to start chatting'
+                  : status === 'loading'
+                    ? 'Model is loading...'
+                    : 'Waiting for model to load...'
               }
               onSend={handleSend}
               disabled={status !== 'ready' || isTyping}

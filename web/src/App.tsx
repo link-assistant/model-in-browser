@@ -1,15 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import '@chatscope/chat-ui-kit-styles/dist/default/styles.min.css';
-import {
-  MainContainer,
-  ChatContainer,
-  MessageList,
-  Message,
-  MessageInput,
-  TypingIndicator,
-  MessageModel,
-} from '@chatscope/chat-ui-kit-react';
+import { ChatProviderProvider } from './context/ChatProviderContext';
+import { ChatContainer } from './components/ChatContainer';
+import { ChatProviderSelector } from './components/ChatProviderSelector';
 import type { WorkerMessage, LoadPayload, GeneratePayload } from './worker';
+import type { ChatMessage } from './types/chat';
 
 // Model configuration
 const MODEL_CONFIG = {
@@ -31,15 +25,20 @@ interface ProgressInfo {
   progress: number;
 }
 
+// Generate unique message IDs
+let messageIdCounter = 0;
+function generateMessageId(): string {
+  return `msg-${Date.now()}-${++messageIdCounter}`;
+}
+
 function App() {
-  const [messages, setMessages] = useState<MessageModel[]>([
+  const [messages, setMessages] = useState<ChatMessage[]>([
     {
-      message:
+      id: generateMessageId(),
+      content:
         "Hello! I'm SmolLM2, a small language model running entirely in your browser. The model is downloading automatically - you can start chatting once it's ready!",
-      sentTime: 'just now',
-      sender: 'SmolLM2',
-      direction: 'incoming',
-      position: 'single',
+      sender: 'assistant',
+      timestamp: new Date(),
     },
   ]);
   const [status, setStatus] = useState<ModelStatus>('idle');
@@ -49,6 +48,7 @@ function App() {
 
   const workerRef = useRef<Worker | null>(null);
   const currentResponseRef = useRef<string>('');
+  const currentResponseIdRef = useRef<string>('');
 
   // Track if auto-load has been triggered
   const autoLoadTriggeredRef = useRef(false);
@@ -96,10 +96,13 @@ function App() {
           setMessages((prev) => {
             const updated = [...prev];
             const lastIdx = updated.length - 1;
-            if (lastIdx >= 0 && updated[lastIdx].sender === 'SmolLM2') {
+            if (
+              lastIdx >= 0 &&
+              updated[lastIdx].id === currentResponseIdRef.current
+            ) {
               updated[lastIdx] = {
                 ...updated[lastIdx],
-                message: currentResponseRef.current,
+                content: currentResponseRef.current,
               };
             }
             return updated;
@@ -157,26 +160,26 @@ function App() {
       if (!workerRef.current || status !== 'ready' || isTyping) return;
 
       // Add user message
-      const userMessage: MessageModel = {
-        message: text,
-        sentTime: 'just now',
-        sender: 'You',
-        direction: 'outgoing',
-        position: 'single',
+      const userMessage: ChatMessage = {
+        id: generateMessageId(),
+        content: text,
+        sender: 'user',
+        timestamp: new Date(),
       };
 
       // Add placeholder for AI response
-      const aiPlaceholder: MessageModel = {
-        message: '',
-        sentTime: 'just now',
-        sender: 'SmolLM2',
-        direction: 'incoming',
-        position: 'single',
+      const assistantMessageId = generateMessageId();
+      const aiPlaceholder: ChatMessage = {
+        id: assistantMessageId,
+        content: '',
+        sender: 'assistant',
+        timestamp: new Date(),
       };
 
       setMessages((prev) => [...prev, userMessage, aiPlaceholder]);
       setIsTyping(true);
       currentResponseRef.current = '';
+      currentResponseIdRef.current = assistantMessageId;
 
       // Format prompt for the instruct model
       const prompt = `<|im_start|>user\n${text}<|im_end|>\n<|im_start|>assistant\n`;
@@ -208,67 +211,52 @@ function App() {
     }
   };
 
+  const isDisabled = status !== 'ready';
+
   return (
-    <div className="app-container">
-      <header className="header">
-        <h1>SmolLM2 in Browser</h1>
-        <p>AI language model running entirely on your device via WebAssembly</p>
-      </header>
+    <ChatProviderProvider defaultProvider="chatscope">
+      <div className="app-container">
+        <header className="header">
+          <h1>SmolLM2 in Browser</h1>
+          <p>AI language model running entirely on your device via WebAssembly</p>
+          <ChatProviderSelector />
+        </header>
 
-      <div className="status-bar">
-        <div className={`status-indicator ${getStatusIndicatorClass()}`} />
-        <span>{statusText}</span>
-        {status === 'error' && (
-          <button className="load-button" onClick={handleLoadModel}>
-            Retry Load
-          </button>
+        <div className="status-bar">
+          <div className={`status-indicator ${getStatusIndicatorClass()}`} />
+          <span>{statusText}</span>
+          {status === 'error' && (
+            <button className="load-button" onClick={handleLoadModel}>
+              Retry Load
+            </button>
+          )}
+        </div>
+
+        {progress && (
+          <div className="progress-bar">
+            <div
+              className="progress-bar-fill"
+              style={{ width: `${progress.progress}%` }}
+            />
+          </div>
         )}
-      </div>
 
-      {progress && (
-        <div className="progress-bar">
-          <div
-            className="progress-bar-fill"
-            style={{ width: `${progress.progress}%` }}
+        <div className="chat-container">
+          <ChatContainer
+            messages={messages}
+            isTyping={isTyping}
+            isDisabled={isDisabled}
+            onSendMessage={handleSend}
+            statusText={statusText}
           />
         </div>
-      )}
 
-      <div className="chat-container">
-        <MainContainer>
-          <ChatContainer>
-            <MessageList
-              typingIndicator={
-                isTyping ? (
-                  <TypingIndicator content="SmolLM2 is thinking..." />
-                ) : null
-              }
-            >
-              {messages.map((msg, index) => (
-                <Message key={index} model={msg} />
-              ))}
-            </MessageList>
-            <MessageInput
-              placeholder={
-                status === 'ready'
-                  ? 'Type your message...'
-                  : status === 'loading'
-                    ? 'Model is loading...'
-                    : 'Waiting for model to load...'
-              }
-              onSend={handleSend}
-              disabled={status !== 'ready' || isTyping}
-              attachButton={false}
-            />
-          </ChatContainer>
-        </MainContainer>
+        <p className="model-info">
+          Using SmolLM2-135M-Instruct | No data sent to servers | All processing
+          happens locally
+        </p>
       </div>
-
-      <p className="model-info">
-        Using SmolLM2-135M-Instruct | No data sent to servers | All processing
-        happens locally
-      </p>
-    </div>
+    </ChatProviderProvider>
   );
 }
 

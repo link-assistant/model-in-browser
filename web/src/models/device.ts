@@ -1,22 +1,30 @@
 /**
  * Browser device capability detection and model-fit estimation.
  *
- * The goal is to decide, entirely client-side, which catalog models can run on
- * the current device. See docs/case-studies/issue-11 for the research behind
- * the heuristics and the browser-support caveats of each probe.
+ * The goal is to decide, entirely client-side, which catalog models — and at
+ * which quantization — can run on the current device. See
+ * docs/case-studies/issue-11 for the research behind the heuristics and the
+ * browser-support caveats of each probe.
  *
- * Key facts that drive the math:
- * - The WASM engine loads weights as F32 (~4 bytes/parameter) and runs on the
- *   wasm32 backend, whose address space is capped at ~4 GiB. In practice a
- *   single contiguous allocation rarely exceeds ~2 GB, and mobile browsers
- *   reclaim memory far more aggressively.
- * - `navigator.deviceMemory` is a coarse, Chromium-only RAM bucket
- *   ({0.25,0.5,1,2,4,8,...} GiB); absent in Firefox/Safari/iOS.
- * - `navigator.hardwareConcurrency` is broadly supported (clamped to 2 on iOS,
- *   8 in WebKit) and is used only to size thread pools, not as a memory proxy.
+ * Two execution paths drive the memory math:
+ * - **WebGPU** (transformers engine, `navigator.gpu`): weights live in GPU
+ *   buffers, so the wasm32 4 GiB address-space ceiling does not apply. The
+ *   budget is larger and bounded by (V)RAM instead.
+ * - **WASM / CPU** (transformers WASM backend, or the candle engine): bounded by
+ *   the wasm32 ~4 GiB address space; a single allocation rarely exceeds ~2 GB,
+ *   and mobile browsers reclaim memory far more aggressively.
+ *
+ * Crucially, fit is evaluated **per quantization variant**: a model that is "too
+ * large" at fp32 often "fits" comfortably at q4, which is the whole point of
+ * supporting quantized weights.
  */
 
-import type { ModelCatalogEntry } from './catalog';
+import {
+  downloadBytes,
+  DTYPE_ORDER,
+  type Dtype,
+  type ModelCatalogEntry,
+} from './catalog';
 
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
@@ -30,15 +38,22 @@ export interface DeviceCapabilities {
   isMobile: boolean;
   /** Whether WebGPU (`navigator.gpu`) is exposed (not necessarily usable). */
   hasWebGpu: boolean;
+  /** Whether a WebGPU adapter was actually acquired (usable acceleration). */
+  webGpuAdapter: boolean;
   /** Storage quota available to this origin in bytes, or null. */
   storageQuotaBytes: number | null;
   /** Storage already used by this origin in bytes, or null. */
   storageUsageBytes: number | null;
   /**
-   * Estimated upper bound (bytes) for the model's in-memory footprint that this
-   * device can safely allocate in a single browser tab.
+   * Estimated upper bound (bytes) for a model's in-memory footprint on the
+   * **WASM/CPU** path (bounded by the wasm32 address space).
    */
   memoryBudgetBytes: number;
+  /**
+   * Estimated upper bound (bytes) for a model's footprint on the **WebGPU**
+   * path (bounded by RAM/VRAM, not the wasm32 ceiling).
+   */
+  gpuBudgetBytes: number;
 }
 
 /** Heuristic mobile detection from the user-agent string. */
@@ -49,12 +64,11 @@ function detectMobile(): boolean {
 }
 
 /**
- * Estimate the runtime memory budget for a single tab.
+ * Estimate the WASM/CPU runtime memory budget for a single tab.
  *
  * Starts from the wasm32 practical ceiling (~2 GB) and tightens it based on the
  * (optional) device-memory hint and mobile status. Deliberately conservative:
- * over-promising leads to OOM tab crashes mid-download, which is a far worse UX
- * than recommending a slightly smaller model.
+ * over-promising leads to OOM tab crashes mid-download.
  */
 export function estimateMemoryBudget(
   deviceMemoryGb: number | null,
@@ -64,8 +78,7 @@ export function estimateMemoryBudget(
   let budget = 2 * GB;
 
   if (deviceMemoryGb != null) {
-    // Reserve memory for the OS, the browser, the page and other tabs: assume
-    // roughly half of total RAM can go to a single model allocation.
+    // Reserve memory for the OS, browser, page and other tabs.
     budget = Math.min(budget, deviceMemoryGb * GB * 0.5);
   }
 
@@ -74,8 +87,32 @@ export function estimateMemoryBudget(
     budget = Math.min(budget, 1 * GB);
   }
 
-  // Never claim less than enough for the smallest model so the UI always has at
-  // least one runnable option to recommend.
+  // Never claim less than enough for the smallest model.
+  return Math.max(budget, 700 * MB);
+}
+
+/**
+ * Estimate the WebGPU memory budget. WebGPU stores weights in GPU buffers, so
+ * the wasm32 ceiling does not apply; the limit is (V)RAM. We still stay
+ * conservative because integrated GPUs share system RAM.
+ */
+export function estimateGpuBudget(
+  deviceMemoryGb: number | null,
+  isMobile: boolean
+): number {
+  // Desktop discrete/integrated GPUs comfortably handle a few GB.
+  let budget = 4 * GB;
+
+  if (deviceMemoryGb != null) {
+    // Integrated GPUs share system RAM; allow up to ~60% of it.
+    budget = Math.min(budget, deviceMemoryGb * GB * 0.6);
+  }
+
+  if (isMobile) {
+    // Mobile GPUs and memory pressure are far tighter.
+    budget = Math.min(budget, 1.5 * GB);
+  }
+
   return Math.max(budget, 700 * MB);
 }
 
@@ -96,8 +133,23 @@ export async function detectDeviceCapabilities(): Promise<DeviceCapabilities> {
 
   const isMobile = detectMobile();
 
-  const hasWebGpu =
-    nav != null && 'gpu' in nav && (nav as Navigator & { gpu?: unknown }).gpu != null;
+  const gpu =
+    nav != null && 'gpu' in nav
+      ? (nav as Navigator & { gpu?: { requestAdapter?: () => Promise<unknown> } }).gpu
+      : undefined;
+  const hasWebGpu = gpu != null;
+
+  // Actually try to acquire an adapter — `navigator.gpu` can exist without a
+  // usable adapter (e.g. blocklisted GPU, headless CI).
+  let webGpuAdapter = false;
+  if (gpu?.requestAdapter) {
+    try {
+      const adapter = await gpu.requestAdapter();
+      webGpuAdapter = adapter != null;
+    } catch {
+      webGpuAdapter = false;
+    }
+  }
 
   let storageQuotaBytes: number | null = null;
   let storageUsageBytes: number | null = null;
@@ -116,46 +168,79 @@ export async function detectDeviceCapabilities(): Promise<DeviceCapabilities> {
     cpuCores,
     isMobile,
     hasWebGpu,
+    webGpuAdapter,
     storageQuotaBytes,
     storageUsageBytes,
     memoryBudgetBytes: estimateMemoryBudget(deviceMemoryGb, isMobile),
+    gpuBudgetBytes: estimateGpuBudget(deviceMemoryGb, isMobile),
   };
 }
 
 /**
- * Estimate the in-memory footprint (bytes) of a model on the F32 WASM engine.
- *
- * Weights are 4 bytes/param; a ~30% overhead covers activations, the KV cache
- * and tokenizer/runtime structures for a short chat context.
+ * The memory budget that applies to a given model on this device: the GPU
+ * budget when the model can use WebGPU and the device has a usable adapter,
+ * otherwise the WASM/CPU budget.
  */
-export function estimateRuntimeBytes(entry: ModelCatalogEntry): number {
-  const F32_BYTES_PER_PARAM = 4;
+export function budgetFor(
+  entry: ModelCatalogEntry,
+  caps: DeviceCapabilities
+): number {
+  const useGpu = entry.webgpu && caps.webGpuAdapter;
+  return useGpu ? caps.gpuBudgetBytes : caps.memoryBudgetBytes;
+}
+
+/**
+ * Estimate the in-memory footprint (bytes) of a model at a given quantization.
+ *
+ * For the transformers engine we use the actual ONNX download size as the
+ * dominant term (quantized weights are kept roughly as-is in memory) plus a
+ * ~30% overhead for activations, the KV cache and runtime structures.
+ *
+ * For the candle engine, weights are F32 (~4 bytes/param) plus overhead.
+ */
+export function estimateRuntimeBytes(
+  entry: ModelCatalogEntry,
+  dtype?: Dtype
+): number {
   const OVERHEAD = 1.3;
-  return Math.round(entry.parameters * F32_BYTES_PER_PARAM * OVERHEAD);
+  if (entry.engine === 'candle') {
+    return Math.round(entry.parameters * 4 * OVERHEAD);
+  }
+  const dl = downloadBytes(entry, dtype);
+  return Math.round(dl * OVERHEAD);
 }
 
 export type FitLevel = 'fits' | 'tight' | 'too-large';
 
 export interface ModelFit {
   level: FitLevel;
+  /** The dtype this fit was evaluated for (transformers engine). */
+  dtype?: Dtype;
   /** Estimated in-memory footprint in bytes. */
   runtimeBytes: number;
-  /** Estimated runtime footprint as a fraction of the device memory budget. */
+  /** Download bytes for the chosen dtype. */
+  downloadBytes: number;
+  /** Estimated runtime footprint as a fraction of the applicable budget. */
   budgetFraction: number;
+  /** Whether this fit assumes WebGPU acceleration. */
+  usesWebGpu: boolean;
   /** True when storage quota is known and too small for the download. */
   insufficientStorage: boolean;
   /** Human-readable reason shown in the UI. */
   reason: string;
 }
 
-/** Classify how well a model fits the detected device. */
-export function evaluateFit(
+/** Classify how well a specific dtype of a model fits the detected device. */
+export function evaluateFitForDtype(
   entry: ModelCatalogEntry,
   caps: DeviceCapabilities,
-  downloadBytes: number
+  dtype?: Dtype
 ): ModelFit {
-  const runtimeBytes = estimateRuntimeBytes(entry);
-  const budgetFraction = runtimeBytes / caps.memoryBudgetBytes;
+  const budget = budgetFor(entry, caps);
+  const usesWebGpu = entry.webgpu && caps.webGpuAdapter;
+  const runtimeBytes = estimateRuntimeBytes(entry, dtype);
+  const dlBytes = downloadBytes(entry, dtype);
+  const budgetFraction = runtimeBytes / budget;
 
   let level: FitLevel;
   if (budgetFraction <= 0.8) {
@@ -170,7 +255,7 @@ export function evaluateFit(
   let insufficientStorage = false;
   if (caps.storageQuotaBytes != null && caps.storageUsageBytes != null) {
     const free = caps.storageQuotaBytes - caps.storageUsageBytes;
-    insufficientStorage = free < downloadBytes * 1.1;
+    insufficientStorage = free < dlBytes * 1.1;
   }
 
   let reason: string;
@@ -179,12 +264,71 @@ export function evaluateFit(
   } else if (insufficientStorage) {
     reason = 'Not enough free storage to cache this model.';
   } else if (level === 'tight') {
-    reason = 'Should run, but close to this device’s memory limit.';
+    reason = `Should run${usesWebGpu ? ' on WebGPU' : ''}, but close to this device’s limit.`;
   } else {
-    reason = 'Comfortably fits this device.';
+    reason = usesWebGpu
+      ? 'Comfortably fits with WebGPU acceleration.'
+      : 'Comfortably fits this device.';
   }
 
-  return { level, runtimeBytes, budgetFraction, insufficientStorage, reason };
+  return {
+    level,
+    dtype,
+    runtimeBytes,
+    downloadBytes: dlBytes,
+    budgetFraction,
+    usesWebGpu,
+    insufficientStorage,
+    reason,
+  };
+}
+
+/**
+ * Pick the best dtype for a model on this device: the highest-quality (largest)
+ * quantization that still fits comfortably; falls back to the smallest variant
+ * so the UI can always show something (even if marked too-large).
+ *
+ * Quality order is the reverse of size order: fp32 > fp16 > q8 > q4 > q4f16.
+ */
+export function pickBestDtype(
+  entry: ModelCatalogEntry,
+  caps: DeviceCapabilities
+): Dtype | undefined {
+  if (entry.engine !== 'transformers' || entry.variants.length === 0) {
+    return undefined;
+  }
+  const available = entry.variants.map((v) => v.dtype);
+  // Highest quality first.
+  const byQuality = [...DTYPE_ORDER].reverse().filter((d) => available.includes(d));
+
+  // Prefer the highest-quality dtype that "fits"; else the highest that is at
+  // most "tight"; else the smallest variant.
+  let tight: Dtype | undefined;
+  for (const d of byQuality) {
+    const fit = evaluateFitForDtype(entry, caps, d);
+    if (fit.insufficientStorage) continue;
+    if (fit.level === 'fits') return d;
+    if (fit.level === 'tight' && tight === undefined) tight = d;
+  }
+  if (tight) return tight;
+
+  // Nothing fits — return the smallest (most compressed) variant.
+  const smallest = [...DTYPE_ORDER].filter((d) => available.includes(d));
+  return smallest[0] ?? available[0];
+}
+
+/**
+ * Evaluate a model on this device using its best dtype (transformers) or its
+ * single F32 footprint (candle).
+ */
+export function evaluateFit(
+  entry: ModelCatalogEntry,
+  caps: DeviceCapabilities,
+  dtype?: Dtype
+): ModelFit {
+  const chosen =
+    dtype ?? (entry.engine === 'transformers' ? pickBestDtype(entry, caps) : undefined);
+  return evaluateFitForDtype(entry, caps, chosen);
 }
 
 /** Format a byte count as a compact human-readable string. */

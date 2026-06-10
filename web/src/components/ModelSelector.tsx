@@ -1,13 +1,14 @@
 /**
  * Model selector: lets the user pick which small language model to run, showing
- * each model's size, estimated memory use, popularity and whether it fits the
- * current device. The recommended (most popular model that fits) is highlighted
- * and selected by default.
+ * each model's size, chosen quantization, estimated memory use, popularity and
+ * whether it fits the current device. The recommended (most popular model that
+ * fits) is highlighted and selected by default.
  */
 
 import type { EvaluatedModel } from '../models/registry';
 import type { DeviceCapabilities, FitLevel } from '../models/device';
 import { formatBytes, formatCount } from '../models/device';
+import { DTYPE_LABEL } from '../models/catalog';
 
 interface ModelSelectorProps {
   models: EvaluatedModel[];
@@ -35,8 +36,16 @@ function DeviceSummary({ caps }: { caps: DeviceCapabilities }) {
   );
   if (caps.cpuCores != null) parts.push(`${caps.cpuCores} cores`);
   parts.push(caps.isMobile ? 'mobile' : 'desktop');
-  if (caps.hasWebGpu) parts.push('WebGPU');
-  parts.push(`budget ~${formatBytes(caps.memoryBudgetBytes)}`);
+  // Report real acceleration: a usable adapter (not just the API surface).
+  if (caps.webGpuAdapter) {
+    parts.push('WebGPU ✓');
+  } else if (caps.hasWebGpu) {
+    parts.push('WebGPU (no adapter)');
+  } else {
+    parts.push('CPU/WASM');
+  }
+  const budget = caps.webGpuAdapter ? caps.gpuBudgetBytes : caps.memoryBudgetBytes;
+  parts.push(`budget ~${formatBytes(budget)}`);
 
   return (
     <p className="device-summary" data-testid="device-summary">
@@ -61,10 +70,11 @@ export function ModelSelector({
       </div>
 
       <ul className="model-list">
-        {models.map(({ entry, fit, downloadBytes, recommended }) => {
+        {models.map(({ entry, fit, dtype, downloadBytes, recommended }) => {
           const selected = entry.id === selectedId;
           const loaded = entry.id === loadedId;
           const disabled = busy || fit.level === 'too-large';
+          const accel = fit.usesWebGpu ? 'WebGPU' : 'CPU';
           return (
             <li key={entry.id}>
               <button
@@ -99,13 +109,27 @@ export function ModelSelector({
                   <span title="Parameter count">
                     {formatCount(entry.parameters)} params
                   </span>
-                  <span title="Download size">
+                  {dtype && (
+                    <span title="Quantization selected for your device">
+                      {DTYPE_LABEL[dtype]}
+                    </span>
+                  )}
+                  <span title="Download size for the selected quantization">
                     ⬇ {formatBytes(downloadBytes)}
                   </span>
                   <span title="Estimated memory while running">
                     🧠 ~{formatBytes(fit.runtimeBytes)}
                   </span>
-                  <span title="HuggingFace downloads (last 30 days)">
+                  <span
+                    title={
+                      fit.usesWebGpu
+                        ? 'Runs with WebGPU acceleration'
+                        : 'Runs on CPU (WASM)'
+                    }
+                  >
+                    {fit.usesWebGpu ? '⚡' : '🖥'} {accel}
+                  </span>
+                  <span title="HuggingFace downloads">
                     ↧ {formatCount(entry.popularity.downloads)}
                   </span>
                   <span title="HuggingFace likes">

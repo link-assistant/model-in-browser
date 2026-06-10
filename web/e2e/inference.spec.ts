@@ -3,38 +3,46 @@ import { test, expect } from '@playwright/test';
 /**
  * E2E tests for in-browser language model inference.
  *
- * These tests verify that the WASM-based language model can:
- * 1. Detect the device and auto-load the recommended model that fits
+ * These tests verify that the Transformers.js (ONNX Runtime Web) engine can:
+ * 1. Detect the device and auto-load a model that fits
  * 2. Generate text responses without errors
  * 3. Stream tokens back to the UI
  * 4. Handle multiple consecutive messages without errors
  *
- * The recommended model on a typical CI device is SmolLM2 135M Instruct
- * (the most popular model that comfortably fits a ~2 GB browser budget).
+ * Determinism: which model is *recommended* depends on the device's memory
+ * budget and on live HuggingFace popularity, so the tests pin a specific model
+ * and quantization via the `?model=&dtype=` URL override. We use the tiny
+ * SmolLM2 135M Instruct at 8-bit — small to download (~137 MB) and robust on the
+ * single-threaded WASM/CPU backend used in CI (no WebGPU, no cross-origin
+ * isolation under `vite preview`).
  *
  * Note: These tests require significant time due to:
- * - Model download (~270MB for the 135M model)
+ * - Model download (~137 MB ONNX for the 135M q8 model)
  * - WASM compilation
  * - Inference computation
  */
 
-// Status text shown once the recommended model has finished loading
+// Deterministic load: pin the model + quantization so the test never depends on
+// the device-specific recommendation or live Hub data.
+const MODEL_URL = '/?model=smollm2-135m-instruct&dtype=q8';
+
+// Status text shown once the pinned model has finished loading
 // (e.g. "SmolLM2 135M Instruct ready").
 const READY = /Instruct ready/;
 // Status text shown while the device is being probed or a model downloads.
-const LOADING = /Detecting|Loading|Downloading/i;
+const LOADING = /Detecting|Loading|Downloading|Generating|engine/i;
 
 test.describe('In-Browser Inference', () => {
   // Run tests serially since they share model state
   test.describe.configure({ mode: 'serial' });
 
   test('should display initial UI correctly', async ({ page }) => {
-    await page.goto('/');
+    await page.goto(MODEL_URL);
 
     // Check header
     await expect(page.getByRole('heading', { name: 'Models in Browser' })).toBeVisible();
     await expect(
-      page.getByText('Small AI language models running entirely on your device via WebAssembly')
+      page.getByText(/Small AI language models running entirely on your device/)
     ).toBeVisible();
 
     // Check initial message
@@ -49,12 +57,14 @@ test.describe('In-Browser Inference', () => {
     // Check footer info
     await expect(page.getByText(/No data sent to servers/)).toBeVisible();
 
-    // The recommended model should start auto-loading
-    await expect(page.getByText(LOADING)).toBeVisible({ timeout: 10000 });
+    // The pinned model should auto-load and become ready. (We assert the stable
+    // end-state rather than a transient "loading" status, which can flash by too
+    // quickly to observe once model files are cached.)
+    await expect(page.getByText(READY)).toBeVisible({ timeout: 5 * 60 * 1000 });
   });
 
   test('should load the recommended model automatically without button click', async ({ page }) => {
-    await page.goto('/');
+    await page.goto(MODEL_URL);
 
     // Should show loading status automatically (no button click needed)
     await expect(page.getByText(LOADING)).toBeVisible({ timeout: 10000 });
@@ -69,7 +79,7 @@ test.describe('In-Browser Inference', () => {
   });
 
   test('should generate text response without errors', async ({ page }) => {
-    await page.goto('/');
+    await page.goto(MODEL_URL);
 
     // Listen for console errors from the start
     const consoleErrors: string[] = [];
@@ -114,7 +124,7 @@ test.describe('In-Browser Inference', () => {
   });
 
   test('should stream tokens to the UI', async ({ page }) => {
-    await page.goto('/');
+    await page.goto(MODEL_URL);
 
     // Wait for model to auto-load
     await expect(page.getByText(READY)).toBeVisible({
@@ -138,7 +148,7 @@ test.describe('In-Browser Inference', () => {
   });
 
   test('should handle multiple consecutive messages without errors (issue #7)', async ({ page }) => {
-    await page.goto('/');
+    await page.goto(MODEL_URL);
 
     // Listen for console errors from the start - this is crucial for detecting the broadcast error
     const consoleErrors: string[] = [];
@@ -216,7 +226,7 @@ test.describe('In-Browser Inference', () => {
 
 test.describe('Error Handling', () => {
   test('should handle model loading gracefully', async ({ page }) => {
-    await page.goto('/');
+    await page.goto(MODEL_URL);
 
     // Model starts loading automatically
     await expect(page.getByText(LOADING)).toBeVisible({ timeout: 10000 });

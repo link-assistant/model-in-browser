@@ -60,6 +60,8 @@ node_modules/
 web/node_modules/
 web/dist/
 web/src/pkg/
+# ORT wasm copied from node_modules by scripts/copy-ort.mjs (generated)
+web/public/ort/
 .npm
 npm-debug.log*
 

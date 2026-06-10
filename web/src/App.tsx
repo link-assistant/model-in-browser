@@ -10,18 +10,47 @@ import {
   modelUrls,
   formatPrompt,
   getModelById,
+  downloadBytes,
+  type Dtype,
   type ModelCatalogEntry,
 } from './models/catalog';
 import {
   detectDeviceCapabilities,
+  pickBestDtype,
+  formatBytes,
   type DeviceCapabilities,
 } from './models/device';
 import {
   evaluateCatalog,
   fetchLivePopularity,
+  fetchLiveCatalogSizes,
+  discoverModels,
+  mergeCatalog,
   pickRecommended,
   type EvaluatedModel,
 } from './models/registry';
+
+// Auto-download cap: on first visit we only auto-load the recommended model
+// when its download stays under this size, so a large model never starts a
+// multi-gigabyte download without an explicit click. Larger models remain
+// selectable (one click loads them). An explicit `?model=` override bypasses
+// this cap.
+const AUTO_LOAD_MAX_BYTES = 700 * 1024 * 1024;
+
+/** Read an optional `?model=` / `?dtype=` override from the URL (handy for
+ * sharable links and deterministic e2e tests). */
+function readUrlOverride(): { model: string | null; dtype: Dtype | null } {
+  if (typeof window === 'undefined') return { model: null, dtype: null };
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      model: params.get('model'),
+      dtype: (params.get('dtype') as Dtype | null) ?? null,
+    };
+  } catch {
+    return { model: null, dtype: null };
+  }
+}
 
 type ModelStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -55,6 +84,7 @@ function App() {
 
   // Model selection state
   const [caps, setCaps] = useState<DeviceCapabilities | null>(null);
+  const [catalog, setCatalog] = useState<ModelCatalogEntry[]>(MODEL_CATALOG);
   const [evaluated, setEvaluated] = useState<EvaluatedModel[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loadedId, setLoadedId] = useState<string | null>(null);
@@ -66,22 +96,67 @@ function App() {
   const loadedEntryRef = useRef<ModelCatalogEntry | null>(null);
   // Guards the one-time automatic load of the recommended model.
   const autoLoadTriggeredRef = useRef(false);
+  // Live mirrors of state needed inside the stable loadModelEntry callback.
+  const capsRef = useRef<DeviceCapabilities | null>(null);
+  const evaluatedRef = useRef<EvaluatedModel[]>([]);
+  const catalogRef = useRef<ModelCatalogEntry[]>(MODEL_CATALOG);
+  const overrideRef = useRef(readUrlOverride());
 
-  // Send a load request for a given model entry.
-  const loadModelEntry = useCallback((entry: ModelCatalogEntry) => {
-    if (!workerRef.current) return;
-    setSelectedId(entry.id);
-    setStatus('loading');
-    setStatusText(`Loading ${entry.name}...`);
-    setProgress(null);
-    const urls = modelUrls(entry);
-    const loadPayload: LoadPayload = {
-      modelUrl: urls.modelUrl,
-      tokenizerUrl: urls.tokenizerUrl,
-      configUrl: urls.configUrl,
-    };
-    workerRef.current.postMessage({ type: 'load', payload: loadPayload });
+  // The quantization to use for an entry on this device: the per-model choice
+  // from the evaluated catalog, or a freshly computed best dtype.
+  const chosenDtypeFor = useCallback((entry: ModelCatalogEntry): Dtype | undefined => {
+    if (entry.engine !== 'transformers') return undefined;
+    if (overrideRef.current.dtype) return overrideRef.current.dtype;
+    const ev = evaluatedRef.current.find((m) => m.entry.id === entry.id);
+    if (ev?.dtype) return ev.dtype;
+    return capsRef.current ? pickBestDtype(entry, capsRef.current) : entry.variants[0]?.dtype;
   }, []);
+
+  // Send a load request for a given model entry, dispatching by engine.
+  const loadModelEntry = useCallback(
+    (entry: ModelCatalogEntry) => {
+      if (!workerRef.current) return;
+      setSelectedId(entry.id);
+      setStatus('loading');
+      setStatusText(`Loading ${entry.name}...`);
+      setProgress(null);
+
+      let loadPayload: LoadPayload;
+      if (entry.engine === 'transformers') {
+        const caps = capsRef.current;
+        const device: 'webgpu' | 'wasm' =
+          entry.webgpu && caps?.webGpuAdapter ? 'webgpu' : 'wasm';
+        loadPayload = {
+          engine: 'transformers',
+          repo: entry.repo,
+          revision: entry.revision,
+          dtype: chosenDtypeFor(entry),
+          device,
+        };
+      } else {
+        const urls = modelUrls(entry);
+        loadPayload = {
+          engine: 'candle',
+          modelUrl: urls.modelUrl,
+          tokenizerUrl: urls.tokenizerUrl,
+          configUrl: urls.configUrl,
+        };
+      }
+      workerRef.current.postMessage({ type: 'load', payload: loadPayload });
+    },
+    [chosenDtypeFor]
+  );
+
+  // Keep refs in sync for use inside the stable load callback.
+  useEffect(() => {
+    capsRef.current = caps;
+  }, [caps]);
+  useEffect(() => {
+    evaluatedRef.current = evaluated;
+  }, [evaluated]);
+  useEffect(() => {
+    catalogRef.current = catalog;
+  }, [catalog]);
 
   // Detect device capabilities and evaluate the catalog on mount.
   useEffect(() => {
@@ -93,22 +168,31 @@ function App() {
       if (cancelled) return;
       setCaps(detected);
 
-      // Show an immediate evaluation using static popularity, then refresh.
+      // Show an immediate evaluation using the static seed, then refresh live.
       setEvaluated(evaluateCatalog(MODEL_CATALOG, detected));
+      const override = overrideRef.current;
+      const overridden =
+        override.model && getModelById(override.model, MODEL_CATALOG);
       const recommended = pickRecommended(MODEL_CATALOG, detected);
-      setSelectedId(recommended?.id ?? null);
+      setSelectedId(overridden ? override.model : recommended?.id ?? null);
       setStatusText('Ready to load a model');
 
-      // Refresh popularity from the live HuggingFace Hub in the background.
+      // Refresh the catalog from the live HuggingFace Hub in the background:
+      // popularity + per-dtype sizes for the seed, plus dynamically discovered
+      // popular Transformers.js models. Any failure keeps the static seed.
       try {
-        const refreshed = await fetchLivePopularity(
-          MODEL_CATALOG,
-          controller.signal
-        );
+        const [withPopularity, discovered] = await Promise.all([
+          fetchLivePopularity(MODEL_CATALOG, controller.signal).then((e) =>
+            fetchLiveCatalogSizes(e, controller.signal)
+          ),
+          discoverModels(8, undefined, controller.signal).catch(() => []),
+        ]);
         if (cancelled) return;
-        setEvaluated(evaluateCatalog(refreshed, detected));
+        const merged = mergeCatalog(withPopularity, discovered);
+        setCatalog(merged);
+        setEvaluated(evaluateCatalog(merged, detected));
       } catch {
-        // Keep static popularity on failure.
+        // Keep the static seed on failure.
       }
     })();
 
@@ -165,7 +249,7 @@ function App() {
             setProgress(null);
             // selectedId is the model we asked the worker to load.
             setSelectedId((id) => {
-              const entry = id ? getModelById(id) : null;
+              const entry = id ? getModelById(id, catalogRef.current) : null;
               loadedEntryRef.current = entry ?? null;
               setLoadedId(entry?.id ?? null);
               setStatusText(entry ? `${entry.name} ready` : 'Model ready');
@@ -199,21 +283,32 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Once both the worker and a recommended model are ready, auto-load it once.
+  // Once both the worker and a recommended model are ready, auto-load it once —
+  // but only when the download is small enough (or explicitly requested via
+  // `?model=`), so we never start a multi-gigabyte download unprompted.
   useEffect(() => {
     if (autoLoadTriggeredRef.current) return;
     if (!workerRef.current || !selectedId || caps == null) return;
-    const entry = getModelById(selectedId);
+    const entry = getModelById(selectedId, catalogRef.current);
     if (!entry) return;
     autoLoadTriggeredRef.current = true;
+
+    const isOverride = overrideRef.current.model === entry.id;
+    const dl = downloadBytes(entry, chosenDtypeFor(entry));
+    if (!isOverride && dl > AUTO_LOAD_MAX_BYTES) {
+      setStatusText(
+        `${entry.name} recommended — click it to download (${formatBytes(dl)})`
+      );
+      return;
+    }
     loadModelEntry(entry);
-  }, [selectedId, caps, loadModelEntry]);
+  }, [selectedId, caps, loadModelEntry, chosenDtypeFor]);
 
   // Handle a user choosing a model from the selector.
   const handleSelectModel = useCallback(
     (id: string) => {
       if (status === 'loading') return;
-      const entry = getModelById(id);
+      const entry = getModelById(id, catalogRef.current);
       if (!entry || entry.id === loadedId) {
         setSelectedId(id);
         return;
@@ -225,7 +320,7 @@ function App() {
 
   // Retry loading the currently selected model.
   const handleRetry = useCallback(() => {
-    const entry = selectedId ? getModelById(selectedId) : null;
+    const entry = selectedId ? getModelById(selectedId, catalogRef.current) : null;
     if (entry) loadModelEntry(entry);
   }, [selectedId, loadModelEntry]);
 
@@ -256,17 +351,14 @@ function App() {
       currentResponseRef.current = '';
       currentResponseIdRef.current = assistantMessageId;
 
-      // Format the prompt using the loaded model's chat template.
-      const prompt = formatPrompt(entry, text);
-
-      const generatePayload: GeneratePayload = {
-        prompt,
-        params: {
-          maxTokens: 256,
-          temperature: 0.7,
-          topP: 0.9,
-        },
-      };
+      // The transformers engine applies the tokenizer's built-in chat template,
+      // so it takes structured messages; the candle engine takes a manually
+      // formatted prompt string.
+      const generatePayload: GeneratePayload =
+        entry.engine === 'transformers'
+          ? { messages: [{ role: 'user', content: text }] }
+          : { prompt: formatPrompt(entry, text) };
+      generatePayload.params = { maxTokens: 256, temperature: 0.7, topP: 0.9 };
 
       workerRef.current.postMessage({ type: 'generate', payload: generatePayload });
     },
@@ -295,8 +387,8 @@ function App() {
         <header className="header">
           <h1>Models in Browser</h1>
           <p>
-            Small AI language models running entirely on your device via
-            WebAssembly
+            Small AI language models running entirely on your device — WebGPU
+            accelerated when available, WebAssembly otherwise
           </p>
           <ChatProviderSelector />
         </header>

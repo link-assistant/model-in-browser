@@ -37,6 +37,44 @@ import {
 // this cap.
 const AUTO_LOAD_MAX_BYTES = 700 * 1024 * 1024;
 
+/**
+ * Absolute base URL the ONNX Runtime Web wasm binaries are served from.
+ *
+ * Resolved from Vite's configured base (`import.meta.env.BASE_URL`) against the
+ * current document so it is correct even when the app is deployed under a
+ * sub-path — e.g. a GitHub Pages project site at `https://host/<repo>/`. The
+ * worker can't compute this reliably from its own location (its bundle lives in
+ * an `assets/` sub-folder), so we compute it here and pass it in. See issue #13:
+ * using the origin root made ORT fetch `https://host/ort/...` instead of
+ * `https://host/<repo>/ort/...`, breaking model loading on the deployed site.
+ */
+function resolveOrtBase(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    return new URL(`${import.meta.env.BASE_URL}ort/`, window.location.href).href;
+  } catch {
+    try {
+      return new URL('./ort/', window.location.href).href;
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+/** Whether verbose worker/UI tracing is enabled via `?debug=1` or
+ * `localStorage.mib_debug` — handy for diagnosing load failures in the field. */
+function readDebugFlag(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const v = params.get('debug');
+    if (v === '1' || v === 'true') return true;
+    return window.localStorage?.getItem('mib_debug') === '1';
+  } catch {
+    return false;
+  }
+}
+
 /** Read an optional `?model=` / `?dtype=` override from the URL (handy for
  * sharable links and deterministic e2e tests). */
 function readUrlOverride(): { model: string | null; dtype: Dtype | null } {
@@ -132,6 +170,7 @@ function App() {
           revision: entry.revision,
           dtype: chosenDtypeFor(entry),
           device,
+          ortBase: resolveOrtBase(),
         };
       } else {
         const urls = modelUrls(entry);
@@ -207,6 +246,13 @@ function App() {
     const worker = new Worker(new URL('./worker.ts', import.meta.url), {
       type: 'module',
     });
+
+    const debug = readDebugFlag();
+    if (debug) {
+      // eslint-disable-next-line no-console
+      console.log('[app] ORT base =', resolveOrtBase(), '| BASE_URL =', import.meta.env.BASE_URL);
+    }
+    worker.postMessage({ type: 'init', payload: { debug } });
 
     worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
       const { type, payload } = event.data;

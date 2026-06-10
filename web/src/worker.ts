@@ -12,12 +12,29 @@
  * - **candle** — the project's original Rust/WebAssembly engine. CPU-only, loads
  *   F32 safetensors and uses a manually-formatted prompt string.
  *
- * The ORT wasm binaries are served same-origin from `./ort/` (copied from
+ * The ORT wasm binaries are served same-origin from `<base>ort/` (copied from
  * node_modules by `scripts/copy-ort.mjs`) so the WASM backend works under
- * cross-origin isolation and offline, with no CDN dependency.
+ * cross-origin isolation and offline, with no CDN dependency. The absolute base
+ * URL is resolved on the main thread (where `import.meta.env.BASE_URL` and the
+ * document location are known) and passed in via `LoadPayload.ortBase`, so it
+ * is correct even when the app is deployed under a sub-path such as a GitHub
+ * Pages project site (`/<repo>/`). See issue #13.
  */
 
 import type { Dtype } from './models/catalog';
+
+/**
+ * Verbose worker tracing. Off by default; the main thread flips it on by
+ * posting `{ type: 'init', payload: { debug: true } }` (driven by a `?debug=1`
+ * URL flag or `localStorage.mib_debug`). When on, key steps — engine import,
+ * resolved ORT wasm path, device selection — are logged to the worker console,
+ * which is invaluable for diagnosing load failures like issue #13 where the
+ * only symptom was a generic "no available backend found".
+ */
+let DEBUG = false;
+function debugLog(...args: unknown[]): void {
+  if (DEBUG) console.log('[worker]', ...args);
+}
 
 // Message types for worker communication
 export interface WorkerMessage {
@@ -48,6 +65,14 @@ export interface LoadPayload {
   engine?: WorkerEngine;
 
   // --- transformers engine ---
+  /**
+   * Absolute base URL the ONNX Runtime Web wasm binaries are served from, e.g.
+   * `https://link-assistant.github.io/model-in-browser/ort/`. Computed on the
+   * main thread from `import.meta.env.BASE_URL` + the document location so it
+   * stays correct under a deployment sub-path. When omitted the worker falls
+   * back to deriving a path from its own location (origin-root deployments).
+   */
+  ortBase?: string;
   /** HuggingFace repo id, e.g. `HuggingFaceTB/SmolLM2-135M-Instruct`. */
   repo?: string;
   /** Branch/revision. */
@@ -250,18 +275,42 @@ let generatorKey: string | null = null; // `${repo}@${revision}:${dtype}:${devic
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let transformersMod: any = null;
 
-async function getTransformers() {
+/**
+ * Resolve the absolute base URL for the ORT wasm binaries.
+ *
+ * Prefers the `ortBase` computed on the main thread (correct under any
+ * deployment sub-path). Falls back to deriving a path from the worker's own
+ * location — but anchored at the **deployment root**, not the asset folder the
+ * worker bundle lives in. Historically this used `self.location.origin`, which
+ * dropped the GitHub Pages project sub-path (`/<repo>/`) and made ORT request
+ * `https://host/ort/...` instead of `https://host/<repo>/ort/...`, producing the
+ * "no available backend found … importing a module script failed" error of
+ * issue #13.
+ */
+function resolveOrtBase(ortBase?: string): string | null {
+  if (ortBase) return ortBase;
+  try {
+    // The worker bundle is emitted under `<base>assets/`, so `../ort/` relative
+    // to it points back at `<base>ort/` regardless of the deployment sub-path.
+    return new URL('../ort/', self.location.href).href;
+  } catch {
+    return null;
+  }
+}
+
+async function getTransformers(ortBase?: string) {
   if (transformersMod) return transformersMod;
   postMessage({ type: 'status', payload: 'Loading inference engine...' });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mod: any = await import('@huggingface/transformers');
   // Serve ORT wasm same-origin (see scripts/copy-ort.mjs); fall back to the
-  // library default (CDN) if the local copy is missing.
-  try {
-    const base = new URL('./ort/', self.location.origin + '/').href;
+  // library default (CDN) if we cannot resolve a local path.
+  const base = resolveOrtBase(ortBase);
+  if (base) {
     mod.env.backends.onnx.wasm.wasmPaths = base;
-  } catch {
-    /* keep library default */
+    debugLog('ORT wasmPaths =', base);
+  } else {
+    debugLog('ORT wasmPaths left at library default (CDN)');
   }
   // We download models straight from the Hub; no local model dir.
   mod.env.allowLocalModels = false;
@@ -284,7 +333,8 @@ async function loadTransformersModel(payload: LoadPayload): Promise<void> {
     return;
   }
 
-  const mod = await getTransformers();
+  debugLog('loadTransformersModel', { repo: payload.repo, revision, dtype, requested, ortBase: payload.ortBase });
+  const mod = await getTransformers(payload.ortBase);
 
   // Dispose any previously-loaded transformers pipeline before loading another.
   if (generator?.dispose) {
@@ -437,10 +487,16 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>): Promise<void> => {
   const { type, payload } = event.data;
   try {
     switch (type) {
-      case 'init':
+      case 'init': {
         // The transformers engine needs no eager init; candle initialises on
-        // first load. Nothing to do here.
+        // first load. We only pick up the optional verbose-tracing flag here.
+        const initPayload = payload as { debug?: boolean } | undefined;
+        if (initPayload?.debug) {
+          DEBUG = true;
+          debugLog('verbose tracing enabled; worker location =', self.location.href);
+        }
         break;
+      }
       case 'load':
         await loadModel(payload as LoadPayload);
         break;

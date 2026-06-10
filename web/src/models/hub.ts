@@ -8,6 +8,9 @@
  * 2. `fetchLiveVariants`   — recompute per-dtype ONNX sizes from the file tree.
  * 3. `discoverModels`      — query the Hub for the most popular Transformers.js
  *    text-generation models and turn them into catalog entries on the fly.
+ *    **Any architecture is accepted** (the field is display-only metadata;
+ *    Transformers.js auto-detects the real architecture at load time), so a
+ *    newly published model becomes selectable with no code change.
  *
  * Every call degrades gracefully: any network/parse error leaves the seed
  * values untouched so the UI keeps working.
@@ -139,18 +142,25 @@ export async function fetchLiveCatalogSizes(
   return Promise.all(entries.map((e) => fetchLiveVariants(e, signal)));
 }
 
-/** Map a Hub `model_type`/architectures string to our Architecture union. */
-function mapArchitecture(info: HubModelInfo): Architecture | null {
-  const t = (
+/**
+ * Best-effort architecture label for display/grouping. The catalog is fully
+ * dynamic, so this **never rejects** a model — Transformers.js auto-detects the
+ * real architecture from the repo config at load time, and our `architecture`
+ * field is metadata only. Returns the well-known family when recognised,
+ * otherwise the raw `model_type` string (or 'unknown').
+ */
+function mapArchitecture(info: HubModelInfo): Architecture {
+  const raw = (
     info.config?.model_type ||
     info.config?.architectures?.[0] ||
     ''
   ).toLowerCase();
-  if (t.includes('qwen2')) return 'qwen2';
-  if (t.includes('phi3') || t.includes('phi')) return 'phi3';
-  if (t.includes('gemma')) return 'gemma';
-  if (t.includes('llama')) return 'llama';
-  return null;
+  if (raw.includes('qwen2')) return 'qwen2';
+  if (raw.includes('phi3') || raw.includes('phi')) return 'phi3';
+  if (raw.includes('gemma')) return 'gemma';
+  if (raw.includes('smollm')) return 'smollm2';
+  if (raw.includes('llama')) return 'llama';
+  return raw || 'unknown';
 }
 
 function titleFromRepo(repo: string): string {
@@ -164,13 +174,14 @@ function idFromRepo(repo: string): string {
 /**
  * Discover the most popular Transformers.js text-generation models on the Hub
  * and turn them into catalog entries. Best-effort: returns whatever it could
- * build, skipping models without a supported architecture or usable ONNX files.
+ * build, skipping only models that expose no usable ONNX files. Architecture is
+ * never a filter, so models of any (even brand-new) family are included.
  *
- * @param limit  How many Hub results to consider (kept small to bound requests).
+ * @param limit  How many Hub results to consider (ranked by downloads).
  * @param exclude Repos already present in the seed (skipped to avoid dupes).
  */
 export async function discoverModels(
-  limit = 8,
+  limit = 30,
   exclude: Set<string> = new Set(MODEL_CATALOG.map((m) => m.repo)),
   signal?: AbortSignal
 ): Promise<ModelCatalogEntry[]> {
@@ -204,8 +215,8 @@ export async function discoverModels(
         const info = (await infoRes.json()) as HubModelInfo;
         const files = (await treeRes.json()) as HubTreeFile[];
 
+        // Architecture is metadata only — never a reason to drop a model.
         const architecture = mapArchitecture(info);
-        if (!architecture) return null;
 
         const variants = combineVariantSizes(files);
         if (variants.length === 0) return null;
@@ -226,7 +237,7 @@ export async function discoverModels(
           parameters,
           webgpu: true,
           variants,
-          description: `Discovered from the HuggingFace Hub — ${architecture} architecture, Transformers.js compatible.`,
+          description: `Discovered live from the HuggingFace Hub — ${architecture} architecture, Transformers.js (ONNX) compatible.`,
           popularity: {
             downloads: info.downloads ?? m.downloads ?? 0,
             likes: info.likes ?? m.likes ?? 0,

@@ -331,6 +331,17 @@ export function evaluateFit(
   return evaluateFitForDtype(entry, caps, chosen);
 }
 
+/**
+ * Whether a model can actually run on this device at its chosen quantization: it
+ * must not exceed the memory budget (`too-large`) and there must be enough free
+ * storage to cache the download. `tight` still counts as runnable. This is the
+ * predicate the UI uses to decide which models to show by default and which to
+ * hide behind the "show models that don't fit" toggle.
+ */
+export function fitsDevice(fit: ModelFit): boolean {
+  return fit.level !== 'too-large' && !fit.insufficientStorage;
+}
+
 /** Format a byte count as a compact human-readable string. */
 export function formatBytes(bytes: number): string {
   if (bytes >= GB) return `${(bytes / GB).toFixed(bytes >= 10 * GB ? 0 : 1)} GB`;

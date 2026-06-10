@@ -24,8 +24,19 @@
 /** Inference engines available in the app. */
 export type Engine = 'transformers' | 'candle';
 
-/** Model architecture families the engines can load. */
-export type Architecture = 'llama' | 'smollm2' | 'qwen2' | 'phi3' | 'gemma';
+/**
+ * Model architecture family. The seed catalog uses well-known families
+ * (`llama`, `smollm2`, `qwen2`, `phi3`, `gemma`), but the catalog is **fully
+ * dynamic**: models discovered live from the Hub may carry any architecture
+ * string (e.g. a freshly published `model_type`), so this is an open string
+ * type rather than a closed union — new architectures show up with no code
+ * change. The architecture is metadata for display/grouping only; Transformers.js
+ * auto-detects the real architecture from the repo config at load time.
+ */
+export type Architecture = string;
+
+/** Architecture families the seed catalog ships with, used for display hints. */
+export type KnownArchitecture = 'llama' | 'smollm2' | 'qwen2' | 'phi3' | 'gemma';
 
 /**
  * Quantization data types, ordered from smallest (most compressed) to largest.

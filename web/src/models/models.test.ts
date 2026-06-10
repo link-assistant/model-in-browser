@@ -17,6 +17,7 @@ import {
   evaluateFitForDtype,
   pickBestDtype,
   budgetFor,
+  fitsDevice,
   formatBytes,
   formatCount,
   type DeviceCapabilities,
@@ -213,6 +214,26 @@ describe('device fit estimation', () => {
     const fit = evaluateFit(entry, caps);
     expect(fit.insufficientStorage).toBe(true);
   });
+
+  it('treats fits/tight as runnable and too-large or no-storage as not', () => {
+    const tiny = getModelById('smollm2-135m-instruct')!;
+    // Comfortable fit → runnable (shown by default).
+    expect(fitsDevice(evaluateFit(tiny, makeCaps({ memoryBudgetBytes: 2 * GB })))).toBe(
+      true
+    );
+    // Too-large → not runnable (hidden by default).
+    const huge = getModelById('phi-3.5-mini-instruct')!;
+    expect(fitsDevice(evaluateFit(huge, makeCaps({ memoryBudgetBytes: 2 * GB })))).toBe(
+      false
+    );
+    // Fits memory but no storage → not runnable.
+    const noStorage = evaluateFit(
+      tiny,
+      makeCaps({ storageQuotaBytes: 1000, storageUsageBytes: 0 })
+    );
+    expect(noStorage.level).not.toBe('too-large');
+    expect(fitsDevice(noStorage)).toBe(false);
+  });
 });
 
 describe('recommendation', () => {
@@ -302,6 +323,28 @@ describe('catalog merge', () => {
         merged[i - 1].parameters
       );
     }
+  });
+
+  it('accepts dynamically-discovered models of any (new) architecture', () => {
+    // The catalog is fully dynamic: a model with an architecture the code has
+    // never heard of must still merge in (architecture is display-only).
+    const tiny = getModelById('smollm2-135m-instruct')!;
+    const discovered: ModelCatalogEntry = {
+      ...tiny,
+      id: 'brand-new-arch-model',
+      name: 'Some Brand New Arch Model',
+      // An architecture string that is NOT in the known union.
+      architecture: 'mamba-ssm',
+      parameters: 60_000_000,
+    };
+    const merged = mergeCatalog(MODEL_CATALOG, [discovered]);
+    const found = getModelById('brand-new-arch-model', merged);
+    expect(found).toBeDefined();
+    expect(found!.architecture).toBe('mamba-ssm');
+    // It is evaluated for fit just like any other model.
+    const caps = makeCaps({ memoryBudgetBytes: 2 * GB });
+    const list = evaluateCatalog(merged, caps);
+    expect(list.some((m) => m.entry.id === 'brand-new-arch-model')).toBe(true);
   });
 });
 

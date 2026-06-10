@@ -16,9 +16,11 @@ download it on demand.
 
 This PR delivers that **in full**, with no part deferred:
 
-- A **device-aware catalog** of small language models (135M → 3.8B parameters)
-  spanning **four architectures** — Llama, Qwen2, Phi-3 and Gemma — plus the
-  SmolLM2 family.
+- A **device-aware, architecture-agnostic catalog** of small language models
+  (135M → 3.8B parameters). A curated seed spans Llama, Qwen2, Phi-3, Gemma and
+  the SmolLM2 family, but discovery is **not gated on any fixed architecture
+  list** — any Transformers.js-compatible model on the Hub (including brand-new
+  architectures) appears **without a code change**.
 - A **dual-engine** runtime: **Transformers.js (ONNX Runtime Web)** as the default
   — with **WebGPU acceleration and an automatic WASM fallback** — alongside the
   project's original **Rust/candle WebAssembly** engine, kept selectable.
@@ -33,6 +35,10 @@ This PR delivers that **in full**, with no part deferred:
 - Per-device **fit evaluation** that accounts for the chosen engine, dtype, and
   WebGPU-vs-WASM memory budget, surfaced as `Fits` / `Tight` / `Too large` badges
   and a recommendation of the **most popular model that actually runs**.
+- **Show only what fits, by default.** The selector lists exactly the models that
+  fit the current device; everything else is collapsed behind a "▸ Show N models
+  that don't fit this device" toggle that, when expanded, shows each hidden model
+  **with the reason it can't run here**.
 
 This case study documents:
 
@@ -67,6 +73,8 @@ testable requirements.
 | R8 | "support **all devices, phones, tablets, pcs**" | Responsive CSS (single-column ≤640px), mobile-aware memory budget, separate WebGPU vs WASM budgets, UA + `deviceMemory` + storage + GPU-adapter probes |
 | R9 | "compile that data to `./docs/case-studies/issue-{id}` folder … deep case study analysis … search online for additional facts … list of all requirements … propose solutions … check known existing components/libraries" | This document and its companions |
 | R10 | "plan and execute everything in **this single pull request**" | All work — including quantization, WebGPU, multi-architecture and the dynamic Hub catalog — landed on branch `issue-11-dcf5e742bdf3` / PR #12 |
+| R11 | (PR comment) "**full real dynamic loading of catalogs**, so as soon as something available for download, we can add it to the list **without updating the code**" | `discoverModels` no longer rejects unknown architectures (`mapArchitecture` never drops a model); it pulls the top ~30 ONNX text-generation repos live and the worker loads any repo by id/dtype, so new downloadable models appear without code changes |
+| R12 | (PR comment) "**list only models that will actually fit** on device, all others are **hidden from user by default**, yet he should be able to **see them and reason they are hidden**" | `ModelSelector` splits models via `fitsDevice()` — only fitting ones show by default; the rest are collapsed behind a "Show N models that don't fit" toggle that reveals each hidden model **with its fit reason** |
 
 ---
 
@@ -219,7 +227,7 @@ For each requirement, the option chosen is marked ✅.
 - ✅ **Reuse the existing vendored chat stack** (chatscope UI kit + react-markdown, brought in via the sibling chat-UI work — see issue #9 case study) and **add a device-aware `ModelSelector`** that surfaces engine, chosen quantization, download size, estimated memory, WebGPU/CPU acceleration, and popularity. Markdown rendering in assistant messages is preserved.
 
 ### R7 — Focus on small LMs that fit a browser
-- ✅ Catalog spans **small LMs from 135M to 3.8B** across **Llama / Qwen2 / Phi-3 / Gemma / SmolLM2**, each variant gated by the per-device fit check; the dynamic discovery step only surfaces ONNX-ready, browser-runnable models.
+- ✅ Catalog spans **small LMs from 135M to 3.8B** across **Llama / Qwen2 / Phi-3 / Gemma / SmolLM2** and any other ONNX text-generation architecture discovered live, each variant gated by the per-device fit check; only **browser-runnable** (fitting) models are shown by default, the rest hidden behind the reveal toggle (R12).
 
 ### R8 — All devices (phone/tablet/PC)
 - ✅ **Responsive layout** (CSS grid collapses to one column ≤640px) + **mobile-aware budget** + **separate WebGPU vs WASM budgets** + **UA / deviceMemory / storage / GPU-adapter** probes. Verified with desktop (1100px) and mobile (390px) screenshots.
@@ -229,6 +237,32 @@ For each requirement, the option chosen is marked ✅.
 
 ### R10 — Single PR
 - ✅ PR #12 — including quantization, WebGPU, multi-architecture and the dynamic Hub catalog. Nothing deferred.
+
+### R11 — Fully dynamic catalog, no code change to add a model
+- ✅ **Architecture gate removed.** `mapArchitecture` (`hub.ts`) now maps known
+  families to friendly labels but **never rejects** an unknown one — it returns
+  the raw `model_type` (or `'unknown'`). `discoverModels` dropped its
+  `if (!architecture) return null;` guard, pulls the **top ~30** ONNX
+  text-generation repos from the Hub by downloads, and the worker loads any repo
+  purely by **id + dtype** (`worker.ts: loadTransformersModel` never references
+  architecture). The result: the moment a model is downloadable on the Hub it can
+  appear in the list **without a code change**. Verified live — discovery surfaced
+  `gpt_neox`, `gpt2`, `qwen3`, `lfm2` and `gemma` repos the previous fixed-list
+  code would have silently dropped.
+- `Architecture` is now an open `string` type (`catalog.ts`); a `KnownArchitecture`
+  union is kept only for display hints. A unit test exercises a synthetic
+  `mamba-ssm` entry to prove a never-before-seen architecture merges and evaluates.
+
+### R12 — Show only what fits; reveal the rest with reasons
+- ✅ **`fitsDevice(fit)`** (`device.ts`) is the single source of truth
+  (`level !== 'too-large' && !insufficientStorage`). `ModelSelector` partitions
+  the evaluated models into **fitting** (shown by default) and **hidden**
+  (collapsed). The selected/loaded model is always kept visible so a model picked
+  from the revealed list never vanishes. A toggle — "▸ Show N models that don't
+  fit this device" — reveals the hidden list, each card **disabled and labelled
+  with its fit reason** (e.g. *"Needs more memory than this device can safely
+  provide."*), preceded by an explanatory note. See the expanded-state screenshot
+  below.
 
 ---
 
@@ -294,9 +328,15 @@ size, estimated memory and WebGPU/CPU acceleration visible:
 
 ![Desktop model selector](../../screenshots/model-selector-desktop.png)
 
-Mobile (390px) — responsive single-column layout:
+Mobile (390px) — responsive single-column layout; only fitting models are shown,
+with the "Show N models that don't fit this device" toggle at the bottom:
 
 ![Mobile model selector](../../screenshots/model-selector-mobile.png)
+
+Hidden models revealed — clicking the toggle expands the non-fitting models, each
+disabled and shown **with the reason it can't run on this device**:
+
+![Hidden (non-fitting) models revealed with reasons](../../screenshots/model-selector-hidden-expanded.png)
 
 ---
 

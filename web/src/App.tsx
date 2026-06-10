@@ -185,7 +185,7 @@ function App() {
           fetchLivePopularity(MODEL_CATALOG, controller.signal).then((e) =>
             fetchLiveCatalogSizes(e, controller.signal)
           ),
-          discoverModels(8, undefined, controller.signal).catch(() => []),
+          discoverModels(30, undefined, controller.signal).catch(() => []),
         ]);
         if (cancelled) return;
         const merged = mergeCatalog(withPopularity, discovered);

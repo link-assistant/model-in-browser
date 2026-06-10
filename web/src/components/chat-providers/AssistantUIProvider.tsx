@@ -148,7 +148,7 @@ function ChatThread({
       <ThreadPrimitive.Viewport className="aui-thread-viewport">
         <ThreadPrimitive.Empty>
           <div className="aui-empty">
-            Start a conversation with SmolLM2
+            Start a conversation with the model
           </div>
         </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages
@@ -157,7 +157,7 @@ function ChatThread({
           }}
         />
         {isTyping && (
-          <div className="aui-typing-indicator">SmolLM2 is thinking...</div>
+          <div className="aui-typing-indicator">Thinking...</div>
         )}
       </ThreadPrimitive.Viewport>
 

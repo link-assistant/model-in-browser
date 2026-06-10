@@ -22,7 +22,7 @@ export function ChatscopeProvider({
         <MessageList
           typingIndicator={
             isTyping ? (
-              <TypingIndicator content="SmolLM2 is thinking..." />
+              <TypingIndicator content="Thinking..." />
             ) : null
           }
         >
@@ -32,7 +32,7 @@ export function ChatscopeProvider({
               model={{
                 message: '',
                 sentTime: msg.timestamp.toLocaleTimeString(),
-                sender: msg.sender === 'user' ? 'You' : 'SmolLM2',
+                sender: msg.sender === 'user' ? 'You' : 'Assistant',
                 direction: msg.sender === 'user' ? 'outgoing' : 'incoming',
                 position: 'single',
               }}

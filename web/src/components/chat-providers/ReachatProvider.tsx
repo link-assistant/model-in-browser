@@ -55,7 +55,7 @@ function convertToSession(messages: ChatMessage[]): Session {
 
   return {
     id: 'main-session',
-    title: 'SmolLM2 Chat',
+    title: 'Model Chat',
     createdAt: new Date(),
     conversations,
   };

@@ -14,7 +14,7 @@ function CustomMessageBox({ message }: { message: ChatMessage }) {
           className="rce-message-title"
           style={{ color: message.sender === 'user' ? '#4a5e2d' : '#61dafb' }}
         >
-          {message.sender === 'user' ? 'You' : 'SmolLM2'}
+          {message.sender === 'user' ? 'You' : 'Assistant'}
         </div>
         <div className="rce-message-text">
           <MarkdownRenderer content={message.content} />

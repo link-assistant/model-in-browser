@@ -148,7 +148,7 @@ function ChatThread({
       <ThreadPrimitive.Viewport className="aui-thread-viewport">
         <ThreadPrimitive.Empty>
           <div className="aui-empty">
-            Start a conversation with SmolLM2
+            Start a conversation with the model
           </div>
         </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages

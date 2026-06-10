@@ -42,23 +42,26 @@ offline / when the API is unreachable.
 
 | Option | Verdict |
 |--------|---------|
-| Native `navigator.deviceMemory` / `hardwareConcurrency` / `storage.estimate` / `navigator.gpu` ✅ | **Chosen** — zero new dependencies, runs in a worker, degrades gracefully. See [device-detection.md](./device-detection.md). |
+| Native `navigator.deviceMemory` / `hardwareConcurrency` / `storage.estimate` / `navigator.gpu.requestAdapter` ✅ | **Chosen** — zero new dependencies, degrades gracefully, and probes for a **usable** WebGPU adapter (not just the API surface) to pick the GPU vs WASM budget. See [device-detection.md](./device-detection.md). |
 | `detect-gpu` (npm) | Rejected — adds a benchmark dependency aimed at game-graphics tiering; we need memory budgeting, not GPU FPS tiers. |
 | UA-parser libraries | Rejected for sizing; a small inline UA regex is enough for the mobile heuristic. |
 
 ## 3. In-browser inference engine
 
-The repo already ships a candle-based Rust→WASM engine with a **Llama** loader.
+The repo already shipped a candle-based Rust→WASM engine with a **Llama** loader.
+This PR adds a second engine so the catalog can span many architectures with
+WebGPU acceleration and quantization — **without removing** the original.
 
 | Option | Verdict |
 |--------|---------|
-| Keep the existing candle/WASM engine ✅ | **Chosen** — already integrated; this PR layers model selection on top without touching the engine. Constraint: `LlamaForCausalLM` only, F32 weights. |
-| [web-llm](https://github.com/mlc-ai/web-llm) (MLC) | Noted as a future path — WebGPU-accelerated, many architectures, but a large dependency and a different runtime model. |
-| [transformers.js](https://github.com/huggingface/transformers.js) | Noted as a future path — broad architecture/onnx support; would replace the candle engine. |
+| [transformers.js](https://github.com/huggingface/transformers.js) (`@huggingface/transformers`, ONNX Runtime Web) ✅ | **Chosen as the default** — WebGPU execution provider with an automatic WASM fallback; quantized weights (`q4` / `q4f16` / `q8` / `fp16` / `fp32`); loads Llama, Qwen2, Phi-3, Gemma and more; uses each tokenizer's built-in chat template. ONNX weights for the chosen dtype stream from the Hub on demand. ORT WASM is served same-origin from `./ort/` so it works offline / in CI / under cross-origin isolation. |
+| Keep the existing candle/WASM engine ✅ | **Kept as a selectable option** — the pure-Rust path is preserved for SmolLM2-135M. CPU-only, F32 weights, `LlamaForCausalLM` loader. Nothing was removed. |
+| [web-llm](https://github.com/mlc-ai/web-llm) (MLC) | Rejected for this PR — also WebGPU/multi-architecture, but a much larger dependency and a different (MLC-compiled) model format; transformers.js reuses the Hub's ONNX assets directly. |
 
-Keeping the engine bounds this PR's scope to **selection + fit + on-demand
-download**, exactly what the issue asks, while documenting the engine-swap paths
-that would widen the catalog later.
+Running **two engines** gives the broad coverage the issue asks for (any small
+ONNX-ready model, quantized, GPU-accelerated) while keeping the demonstrable
+pure-Rust candle path intact. The worker dispatches per catalog entry's `engine`
+field.
 
 ## 4. UI components (formal-ai best practices)
 
@@ -74,11 +77,12 @@ That guidance was already actioned in the sibling chat-UI work
 
 This PR **reuses that stack unchanged** and adds one new component:
 
-- **`ModelSelector`** — a device-summary header plus a responsive card grid. Each
-  card mirrors the existing dark-theme styling and shows the model's fit, size,
-  memory estimate, and popularity. It is the neural-network-in-the-browser piece
-  that issue #11 specifically needs and that the generic chat libraries don't
-  provide.
+- **`ModelSelector`** — a device-summary header (RAM / cores / mobile / real
+  WebGPU status / budget) plus a responsive card grid. Each card mirrors the
+  existing dark-theme styling and shows the model's fit, chosen quantization,
+  download size, memory estimate, WebGPU-vs-CPU acceleration, and popularity. It
+  is the neural-network-in-the-browser piece that issue #11 specifically needs and
+  that the generic chat libraries don't provide.
 
 | Chat-UI option | Status |
 |----------------|--------|

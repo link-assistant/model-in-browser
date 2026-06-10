@@ -30,6 +30,9 @@ const MODEL_URL = '/?model=smollm2-135m-instruct&dtype=q8';
 // (e.g. "SmolLM2 135M Instruct ready").
 const READY = /Instruct ready/;
 // Status text shown while the device is being probed or a model downloads.
+// Matched against the dedicated status indicator (`data-testid="status-text"`)
+// rather than the whole page, so model-card copy that happens to contain words
+// like "loading" or "engine" can't trigger a strict-mode multiple-match.
 const LOADING = /Detecting|Loading|Downloading|Generating|engine/i;
 
 test.describe('In-Browser Inference', () => {
@@ -67,7 +70,9 @@ test.describe('In-Browser Inference', () => {
     await page.goto(MODEL_URL);
 
     // Should show loading status automatically (no button click needed)
-    await expect(page.getByText(LOADING)).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('status-text')).toHaveText(LOADING, {
+      timeout: 10000,
+    });
 
     // Wait for model to be ready (this can take several minutes)
     await expect(page.getByText(READY)).toBeVisible({
@@ -229,7 +234,9 @@ test.describe('Error Handling', () => {
     await page.goto(MODEL_URL);
 
     // Model starts loading automatically
-    await expect(page.getByText(LOADING)).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('status-text')).toHaveText(LOADING, {
+      timeout: 10000,
+    });
 
     // Page should remain responsive
     await expect(page.getByRole('heading', { name: 'Models in Browser' })).toBeVisible();

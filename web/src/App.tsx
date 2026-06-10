@@ -404,7 +404,7 @@ function App() {
 
         <div className="status-bar">
           <div className={`status-indicator ${getStatusIndicatorClass()}`} />
-          <span>{statusText}</span>
+          <span data-testid="status-text">{statusText}</span>
           {status === 'error' && (
             <button className="load-button" onClick={handleRetry}>
               Retry Load

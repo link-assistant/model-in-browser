@@ -62,7 +62,7 @@ export function ReactChatElementsProvider({
             <CustomMessageBox key={msg.id} message={msg} />
           ))}
           {isTyping && (
-            <div className="rce-typing-indicator">SmolLM2 is thinking...</div>
+            <div className="rce-typing-indicator">Thinking...</div>
           )}
         </div>
       </div>

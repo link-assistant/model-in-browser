@@ -22,7 +22,7 @@ export function ChatscopeProvider({
         <MessageList
           typingIndicator={
             isTyping ? (
-              <TypingIndicator content="SmolLM2 is thinking..." />
+              <TypingIndicator content="Thinking..." />
             ) : null
           }
         >

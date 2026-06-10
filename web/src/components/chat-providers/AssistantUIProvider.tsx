@@ -157,7 +157,7 @@ function ChatThread({
           }}
         />
         {isTyping && (
-          <div className="aui-typing-indicator">SmolLM2 is thinking...</div>
+          <div className="aui-typing-indicator">Thinking...</div>
         )}
       </ThreadPrimitive.Viewport>
 

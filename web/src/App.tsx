@@ -2,19 +2,26 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { ChatProviderProvider } from './context/ChatProviderContext';
 import { ChatContainer } from './components/ChatContainer';
 import { ChatProviderSelector } from './components/ChatProviderSelector';
+import { ModelSelector } from './components/ModelSelector';
 import type { WorkerMessage, LoadPayload, GeneratePayload } from './worker';
 import type { ChatMessage } from './types/chat';
-
-// Model configuration
-const MODEL_CONFIG = {
-  // Using SmolLM2-135M-Instruct from HuggingFace
-  modelUrl:
-    'https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/model.safetensors',
-  tokenizerUrl:
-    'https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/tokenizer.json',
-  configUrl:
-    'https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/config.json',
-};
+import {
+  MODEL_CATALOG,
+  modelUrls,
+  formatPrompt,
+  getModelById,
+  type ModelCatalogEntry,
+} from './models/catalog';
+import {
+  detectDeviceCapabilities,
+  type DeviceCapabilities,
+} from './models/device';
+import {
+  evaluateCatalog,
+  fetchLivePopularity,
+  pickRecommended,
+  type EvaluatedModel,
+} from './models/registry';
 
 type ModelStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -36,26 +43,83 @@ function App() {
     {
       id: generateMessageId(),
       content:
-        "Hello! I'm SmolLM2, a small language model running entirely in your browser. The model is downloading automatically - you can start chatting once it's ready!",
+        "Hello! I'm a small language model running entirely in your browser. Pick a model below that fits your device — the recommended one downloads automatically. You can start chatting once it's ready!",
       sender: 'assistant',
       timestamp: new Date(),
     },
   ]);
   const [status, setStatus] = useState<ModelStatus>('idle');
-  const [statusText, setStatusText] = useState('Initializing...');
+  const [statusText, setStatusText] = useState('Detecting device...');
   const [isTyping, setIsTyping] = useState(false);
   const [progress, setProgress] = useState<ProgressInfo | null>(null);
+
+  // Model selection state
+  const [caps, setCaps] = useState<DeviceCapabilities | null>(null);
+  const [evaluated, setEvaluated] = useState<EvaluatedModel[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [loadedId, setLoadedId] = useState<string | null>(null);
 
   const workerRef = useRef<Worker | null>(null);
   const currentResponseRef = useRef<string>('');
   const currentResponseIdRef = useRef<string>('');
-
-  // Track if auto-load has been triggered
+  // The model whose weights are currently loaded, used to format prompts.
+  const loadedEntryRef = useRef<ModelCatalogEntry | null>(null);
+  // Guards the one-time automatic load of the recommended model.
   const autoLoadTriggeredRef = useRef(false);
 
-  // Initialize the worker and automatically start model download
+  // Send a load request for a given model entry.
+  const loadModelEntry = useCallback((entry: ModelCatalogEntry) => {
+    if (!workerRef.current) return;
+    setSelectedId(entry.id);
+    setStatus('loading');
+    setStatusText(`Loading ${entry.name}...`);
+    setProgress(null);
+    const urls = modelUrls(entry);
+    const loadPayload: LoadPayload = {
+      modelUrl: urls.modelUrl,
+      tokenizerUrl: urls.tokenizerUrl,
+      configUrl: urls.configUrl,
+    };
+    workerRef.current.postMessage({ type: 'load', payload: loadPayload });
+  }, []);
+
+  // Detect device capabilities and evaluate the catalog on mount.
   useEffect(() => {
-    // Create worker from worker.ts
+    let cancelled = false;
+    const controller = new AbortController();
+
+    (async () => {
+      const detected = await detectDeviceCapabilities();
+      if (cancelled) return;
+      setCaps(detected);
+
+      // Show an immediate evaluation using static popularity, then refresh.
+      setEvaluated(evaluateCatalog(MODEL_CATALOG, detected));
+      const recommended = pickRecommended(MODEL_CATALOG, detected);
+      setSelectedId(recommended?.id ?? null);
+      setStatusText('Ready to load a model');
+
+      // Refresh popularity from the live HuggingFace Hub in the background.
+      try {
+        const refreshed = await fetchLivePopularity(
+          MODEL_CATALOG,
+          controller.signal
+        );
+        if (cancelled) return;
+        setEvaluated(evaluateCatalog(refreshed, detected));
+      } catch {
+        // Keep static popularity on failure.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, []);
+
+  // Initialize the worker.
+  useEffect(() => {
     const worker = new Worker(new URL('./worker.ts', import.meta.url), {
       type: 'module',
     });
@@ -65,23 +129,10 @@ function App() {
 
       switch (type) {
         case 'status':
-          setStatusText(payload as string);
-          // Automatically start model loading when worker is initialized
-          if (payload === 'Worker initialized' && !autoLoadTriggeredRef.current) {
-            autoLoadTriggeredRef.current = true;
-            // Use setTimeout to ensure state is updated before loading
-            setTimeout(() => {
-              if (workerRef.current) {
-                setStatus('loading');
-                setStatusText('Starting automatic download...');
-                const loadPayload: LoadPayload = {
-                  modelUrl: MODEL_CONFIG.modelUrl,
-                  tokenizerUrl: MODEL_CONFIG.tokenizerUrl,
-                  configUrl: MODEL_CONFIG.configUrl,
-                };
-                workerRef.current.postMessage({ type: 'load', payload: loadPayload });
-              }
-            }, 100);
+          // Surface granular worker progress (e.g. "Downloading model
+          // files..."), but ignore the initial handshake message.
+          if (payload !== 'Worker initialized') {
+            setStatusText(payload as string);
           }
           break;
 
@@ -90,9 +141,7 @@ function App() {
           break;
 
         case 'token':
-          // Append token to current response
           currentResponseRef.current += payload as string;
-          // Update the last message with the streaming response
           setMessages((prev) => {
             const updated = [...prev];
             const lastIdx = updated.length - 1;
@@ -113,11 +162,22 @@ function App() {
           const action = (payload as { action: string }).action;
           if (action === 'load') {
             setStatus('ready');
-            setStatusText('Model ready');
             setProgress(null);
+            // selectedId is the model we asked the worker to load.
+            setSelectedId((id) => {
+              const entry = id ? getModelById(id) : null;
+              loadedEntryRef.current = entry ?? null;
+              setLoadedId(entry?.id ?? null);
+              setStatusText(entry ? `${entry.name} ready` : 'Model ready');
+              return id;
+            });
           } else if (action === 'generate') {
             setIsTyping(false);
-            setStatusText('Model ready');
+            setStatusText(
+              loadedEntryRef.current
+                ? `${loadedEntryRef.current.name} ready`
+                : 'Model ready'
+            );
           }
           break;
         }
@@ -136,30 +196,46 @@ function App() {
     return () => {
       worker.terminate();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load the model
-  const handleLoadModel = useCallback(() => {
-    if (!workerRef.current || status === 'loading' || status === 'ready') return;
+  // Once both the worker and a recommended model are ready, auto-load it once.
+  useEffect(() => {
+    if (autoLoadTriggeredRef.current) return;
+    if (!workerRef.current || !selectedId || caps == null) return;
+    const entry = getModelById(selectedId);
+    if (!entry) return;
+    autoLoadTriggeredRef.current = true;
+    loadModelEntry(entry);
+  }, [selectedId, caps, loadModelEntry]);
 
-    setStatus('loading');
-    setStatusText('Initializing...');
+  // Handle a user choosing a model from the selector.
+  const handleSelectModel = useCallback(
+    (id: string) => {
+      if (status === 'loading') return;
+      const entry = getModelById(id);
+      if (!entry || entry.id === loadedId) {
+        setSelectedId(id);
+        return;
+      }
+      loadModelEntry(entry);
+    },
+    [status, loadedId, loadModelEntry]
+  );
 
-    const loadPayload: LoadPayload = {
-      modelUrl: MODEL_CONFIG.modelUrl,
-      tokenizerUrl: MODEL_CONFIG.tokenizerUrl,
-      configUrl: MODEL_CONFIG.configUrl,
-    };
-
-    workerRef.current.postMessage({ type: 'load', payload: loadPayload });
-  }, [status]);
+  // Retry loading the currently selected model.
+  const handleRetry = useCallback(() => {
+    const entry = selectedId ? getModelById(selectedId) : null;
+    if (entry) loadModelEntry(entry);
+  }, [selectedId, loadModelEntry]);
 
   // Send a message
   const handleSend = useCallback(
     (text: string) => {
       if (!workerRef.current || status !== 'ready' || isTyping) return;
+      const entry = loadedEntryRef.current;
+      if (!entry) return;
 
-      // Add user message
       const userMessage: ChatMessage = {
         id: generateMessageId(),
         content: text,
@@ -167,7 +243,6 @@ function App() {
         timestamp: new Date(),
       };
 
-      // Add placeholder for AI response
       const assistantMessageId = generateMessageId();
       const aiPlaceholder: ChatMessage = {
         id: assistantMessageId,
@@ -181,8 +256,8 @@ function App() {
       currentResponseRef.current = '';
       currentResponseIdRef.current = assistantMessageId;
 
-      // Format prompt for the instruct model
-      const prompt = `<|im_start|>user\n${text}<|im_end|>\n<|im_start|>assistant\n`;
+      // Format the prompt using the loaded model's chat template.
+      const prompt = formatPrompt(entry, text);
 
       const generatePayload: GeneratePayload = {
         prompt,
@@ -212,21 +287,34 @@ function App() {
   };
 
   const isDisabled = status !== 'ready';
+  const loadedName = loadedEntryRef.current?.name ?? 'a model';
 
   return (
     <ChatProviderProvider defaultProvider="chatscope">
       <div className="app-container">
         <header className="header">
-          <h1>SmolLM2 in Browser</h1>
-          <p>AI language model running entirely on your device via WebAssembly</p>
+          <h1>Models in Browser</h1>
+          <p>
+            Small AI language models running entirely on your device via
+            WebAssembly
+          </p>
           <ChatProviderSelector />
         </header>
+
+        <ModelSelector
+          models={evaluated}
+          caps={caps}
+          selectedId={selectedId}
+          loadedId={loadedId}
+          busy={status === 'loading'}
+          onSelect={handleSelectModel}
+        />
 
         <div className="status-bar">
           <div className={`status-indicator ${getStatusIndicatorClass()}`} />
           <span>{statusText}</span>
           {status === 'error' && (
-            <button className="load-button" onClick={handleLoadModel}>
+            <button className="load-button" onClick={handleRetry}>
               Retry Load
             </button>
           )}
@@ -252,8 +340,8 @@ function App() {
         </div>
 
         <p className="model-info">
-          Using SmolLM2-135M-Instruct | No data sent to servers | All processing
-          happens locally
+          Running {loadedName} | No data sent to servers | All processing happens
+          locally
         </p>
       </div>
     </ChatProviderProvider>

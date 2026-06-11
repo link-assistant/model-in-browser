@@ -36,31 +36,175 @@ body {
   flex-direction: column;
 }
 
-.app-container {
+/* ---- Three-panel chat-first layout (issue #15) ---------------------------- *
+ * A persistent left sidebar (brand, conversations, engine + model pickers,
+ * data import/export) beside an always-visible chat column. This is the core
+ * fix for issue #15: the model catalog can no longer push the chat surface off
+ * the page, because it lives in a scrollable sidebar while the chat panel keeps
+ * its own column. Mirrors the Formal-AI web UI's sidebar + chat arrangement. */
+.app-shell {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+}
+
+.sidebar {
+  flex: 0 0 320px;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  background: #1f1f1f;
+  border-right: 1px solid #333;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sidebar-brand h1 {
+  font-size: 1.25rem;
+  color: #61dafb;
+  margin-bottom: 0.25rem;
+}
+
+.sidebar-brand p {
+  font-size: 0.8rem;
+  color: #888;
+  line-height: 1.4;
+}
+
+.sidebar-new-chat {
+  background: linear-gradient(135deg, #61dafb, #21a1f1);
+  color: #1a1a1a;
+  border: none;
+  padding: 0.6rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.sidebar-new-chat:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(97, 218, 251, 0.3);
+}
+
+.conversation-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.conversation-entry {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+  border-radius: 0.4rem;
+  overflow: hidden;
+}
+
+.conversation-entry.is-active {
+  background: #2d3a45;
+}
+
+.conversation-entry-button {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  background: transparent;
+  color: #ddd;
+  border: none;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  border-radius: 0.4rem;
+}
+
+.conversation-entry-button:hover {
+  background: #2a2a2a;
+}
+
+.conversation-entry.is-active .conversation-entry-button {
+  color: #fff;
+}
+
+.conversation-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-delete {
+  flex: 0 0 auto;
+  width: 28px;
+  background: transparent;
+  color: #888;
+  border: none;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 0.4rem;
+}
+
+.conversation-delete:hover {
+  color: #d9534f;
+  background: #2a2a2a;
+}
+
+.sidebar-data-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.data-button {
+  flex: 1 1 0;
+  background: #2a2a2a;
+  color: #ddd;
+  border: 1px solid #3a3a3a;
+  padding: 0.5rem;
+  border-radius: 0.4rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.data-button:hover {
+  background: #333;
+  border-color: #61dafb;
+}
+
+.sidebar-data-note {
+  font-size: 0.7rem;
+  color: #666;
+  line-height: 1.4;
+}
+
+/* The chat column fills the remaining width and never collapses, so the
+ * conversation is always reachable regardless of catalog size. min-width: 0
+ * lets flex children (e.g. reachat) shrink within it instead of overflowing. */
+.chat-main {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   height: 100%;
-  max-width: 1200px;
-  margin: 0 auto;
+  min-height: 0;
   padding: 1rem;
-}
-
-.header {
-  text-align: center;
-  padding: 1rem 0;
-  border-bottom: 1px solid #333;
-  margin-bottom: 1rem;
-}
-
-.header h1 {
-  font-size: 1.5rem;
-  margin-bottom: 0.5rem;
-  color: #61dafb;
-}
-
-.header p {
-  font-size: 0.875rem;
-  color: #888;
+  gap: 0.5rem;
 }
 
 .status-bar {
@@ -155,6 +299,218 @@ body {
   color: #666;
   text-align: center;
   margin-top: 0.5rem;
+}
+
+/* ---- Formal-AI default chat provider -------------------------------------- *
+ * The built-in chat surface that mirrors the Formal-AI web UI: a scrolling
+ * message list with avatars + meta rows and an auto-growing composer. */
+.fa-chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: #252525;
+}
+
+.fa-message-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.fa-message {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.fa-message--outgoing {
+  flex-direction: row-reverse;
+}
+
+.fa-message-avatar {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #1a1a1a;
+}
+
+.fa-message--incoming .fa-message-avatar {
+  background: #61dafb;
+}
+
+.fa-message--outgoing .fa-message-avatar {
+  background: #9ad84a;
+}
+
+.fa-message-body {
+  max-width: 75%;
+  min-width: 0;
+  background: #2d4a5e;
+  border-radius: 0.75rem;
+  padding: 0.6rem 0.85rem;
+}
+
+.fa-message--outgoing .fa-message-body {
+  background: #4a5e2d;
+}
+
+.fa-message-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.fa-message-author {
+  font-weight: 600;
+}
+
+.fa-message-time {
+  font-size: 0.65rem;
+}
+
+.fa-copy-button {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.65rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.3rem;
+  cursor: pointer;
+}
+
+.fa-copy-button:hover {
+  border-color: #61dafb;
+  color: #61dafb;
+}
+
+.fa-message-content {
+  word-break: break-word;
+}
+
+.fa-message-content p {
+  margin: 0.25rem 0;
+}
+
+.fa-message-content p:first-child {
+  margin-top: 0;
+}
+
+.fa-message-content p:last-child {
+  margin-bottom: 0;
+}
+
+.fa-typing {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.5rem;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.8rem;
+}
+
+.fa-typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #61dafb;
+  animation: pulse 1.2s infinite;
+}
+
+.fa-typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.fa-typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+.fa-typing-text {
+  margin-left: 0.25rem;
+}
+
+.fa-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-top: 1px solid #333;
+  background: #1f1f1f;
+}
+
+.fa-composer-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
+  max-height: 200px;
+  background: #2a2a2a;
+  color: #fff;
+  border: 1px solid #3a3a3a;
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.fa-composer-input:focus {
+  outline: none;
+  border-color: #61dafb;
+}
+
+.fa-composer-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.fa-composer-send {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, #61dafb, #21a1f1);
+  color: #1a1a1a;
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.15s, opacity 0.15s;
+}
+
+.fa-composer-send:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.fa-composer-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Deep Chat fills its column. */
+.deepchat-container {
+  height: 100%;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+}
+
+.deepchat-container > * {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* Override chatscope styles for dark theme */
@@ -337,14 +693,23 @@ body {
 }
 
 /* Reachat Styles */
+/* Issue #15 / R7: reachat used to make the model selector narrow because both
+ * shared one column and reachat's own layout claimed the width. The model
+ * picker now lives in the sidebar (a separate column), so that can't happen.
+ * We also pin reachat to fill its own chat column (width + min-width: 0) so its
+ * internal panels lay out at the full available width. */
 .reachat-container {
   height: 100%;
+  width: 100%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
 .reachat-container > div {
   height: 100%;
+  width: 100%;
+  min-width: 0;
 }
 
 /* React Chat Elements Styles */
@@ -544,6 +909,21 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 0.75rem;
+}
+
+/* Inside the narrow sidebar the catalog is a single scrollable column so model
+ * cards never overflow the 320px rail. */
+.sidebar .model-selector {
+  margin-bottom: 0;
+  padding: 0.75rem;
+}
+
+.sidebar .model-list {
+  grid-template-columns: 1fr;
+}
+
+.sidebar .provider-selector {
+  margin: 0;
 }
 
 .model-card {

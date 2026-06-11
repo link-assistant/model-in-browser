@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, ReactNode } from 'react';
-import type { ChatProviderType } from '../types/chat';
+import { type ChatProviderType, DEFAULT_CHAT_PROVIDER } from '../types/chat';
 
 interface ChatProviderContextType {
   provider: ChatProviderType;
@@ -17,7 +17,7 @@ interface ChatProviderProviderProps {
 
 export function ChatProviderProvider({
   children,
-  defaultProvider = 'chatscope',
+  defaultProvider = DEFAULT_CHAT_PROVIDER,
 }: ChatProviderProviderProps) {
   const [provider, setProvider] = useState<ChatProviderType>(defaultProvider);
 

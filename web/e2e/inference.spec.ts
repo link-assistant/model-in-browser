@@ -80,7 +80,7 @@ test.describe('In-Browser Inference', () => {
     });
 
     // Message input should be enabled
-    await expect(page.locator('.cs-message-input__content-editor')).toBeEnabled();
+    await expect(page.getByTestId('composer-input')).toBeEnabled();
   });
 
   test('should generate text response without errors', async ({ page }) => {
@@ -100,7 +100,7 @@ test.describe('In-Browser Inference', () => {
     });
 
     // Send a message
-    const messageInput = page.locator('.cs-message-input__content-editor');
+    const messageInput = page.getByTestId('composer-input');
     await messageInput.fill('Hello');
     await messageInput.press('Enter');
 
@@ -137,7 +137,7 @@ test.describe('In-Browser Inference', () => {
     });
 
     // Send a message
-    const messageInput = page.locator('.cs-message-input__content-editor');
+    const messageInput = page.getByTestId('composer-input');
     await messageInput.fill('Count from 1 to 5');
     await messageInput.press('Enter');
 
@@ -148,7 +148,7 @@ test.describe('In-Browser Inference', () => {
     });
 
     // There should be multiple AI response regions (initial greeting + new response)
-    const aiMessages = page.locator('[class*="cs-message--incoming"]');
+    const aiMessages = page.getByTestId('message-assistant');
     await expect(aiMessages).toHaveCount(2, { timeout: 5000 });
   });
 
@@ -168,7 +168,7 @@ test.describe('In-Browser Inference', () => {
       timeout: 5 * 60 * 1000,
     });
 
-    const messageInput = page.locator('.cs-message-input__content-editor');
+    const messageInput = page.getByTestId('composer-input');
 
     // Send FIRST message
     await messageInput.fill('Say hello');
@@ -224,7 +224,7 @@ test.describe('In-Browser Inference', () => {
     await expect(page.getByText(READY)).toBeVisible();
 
     // There should be 4 AI response regions (initial greeting + 3 responses)
-    const aiMessages = page.locator('[class*="cs-message--incoming"]');
+    const aiMessages = page.getByTestId('message-assistant');
     await expect(aiMessages).toHaveCount(4, { timeout: 5000 });
   });
 });

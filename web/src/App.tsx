@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { ChatProviderProvider } from './context/ChatProviderContext';
 import { ChatContainer } from './components/ChatContainer';
 import { ChatProviderSelector } from './components/ChatProviderSelector';
@@ -29,6 +29,14 @@ import {
   pickRecommended,
   type EvaluatedModel,
 } from './models/registry';
+import {
+  type Conversation,
+  deriveTitle,
+  serializeBundle,
+  parseBundle,
+  saveConversations,
+  loadConversations,
+} from './storage/conversations';
 
 // Auto-download cap: on first visit we only auto-load the recommended model
 // when its download stays under this size, so a large model never starts a
@@ -36,6 +44,10 @@ import {
 // selectable (one click loads them). An explicit `?model=` override bypasses
 // this cap.
 const AUTO_LOAD_MAX_BYTES = 700 * 1024 * 1024;
+
+/** The assistant greeting that seeds every fresh conversation. */
+const GREETING =
+  "Hello! I'm a small language model running entirely in your browser. Pick a model in the sidebar that fits your device — the recommended one downloads automatically. You can start chatting once it's ready!";
 
 /**
  * Absolute base URL the ONNX Runtime Web wasm binaries are served from.
@@ -99,22 +111,47 @@ interface ProgressInfo {
   progress: number;
 }
 
-// Generate unique message IDs
-let messageIdCounter = 0;
-function generateMessageId(): string {
-  return `msg-${Date.now()}-${++messageIdCounter}`;
+// Generate unique ids for messages and conversations.
+let idCounter = 0;
+function generateId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${++idCounter}`;
+}
+
+/** Build a fresh conversation seeded with the assistant greeting. */
+function createConversation(): Conversation {
+  const now = new Date();
+  return {
+    id: generateId('conv'),
+    title: 'New conversation',
+    createdAt: now,
+    updatedAt: now,
+    messages: [
+      {
+        id: generateId('msg'),
+        content: GREETING,
+        sender: 'assistant',
+        timestamp: now,
+      },
+    ],
+  };
 }
 
 function App() {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: generateMessageId(),
-      content:
-        "Hello! I'm a small language model running entirely in your browser. Pick a model below that fits your device — the recommended one downloads automatically. You can start chatting once it's ready!",
-      sender: 'assistant',
-      timestamp: new Date(),
-    },
-  ]);
+  // All chat data lives as a list of conversations, persisted to localStorage as
+  // a Links Notation (.lino) bundle. On first load we restore any saved
+  // conversations, otherwise we start a fresh one with the greeting.
+  const initialConversations = useMemo<Conversation[]>(() => {
+    const loaded = loadConversations();
+    return loaded.length > 0 ? loaded : [createConversation()];
+  }, []);
+  const [conversations, setConversations] =
+    useState<Conversation[]>(initialConversations);
+  const [activeId, setActiveId] = useState<string>(initialConversations[0].id);
+  const activeIdRef = useRef(activeId);
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
   const [status, setStatus] = useState<ModelStatus>('idle');
   const [statusText, setStatusText] = useState('Detecting device...');
   const [isTyping, setIsTyping] = useState(false);
@@ -139,6 +176,46 @@ function App() {
   const evaluatedRef = useRef<EvaluatedModel[]>([]);
   const catalogRef = useRef<ModelCatalogEntry[]>(MODEL_CATALOG);
   const overrideRef = useRef(readUrlOverride());
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // The active conversation and its messages drive the chat surface.
+  const activeConversation =
+    conversations.find((c) => c.id === activeId) ?? conversations[0];
+  const messages = activeConversation?.messages ?? [];
+
+  // Apply an update to the active conversation's messages, refreshing its
+  // derived title and timestamp. All chat mutations flow through here so the
+  // persisted bundle always reflects the latest state.
+  const updateActiveMessages = useCallback(
+    (updater: (msgs: ChatMessage[]) => ChatMessage[]) => {
+      setConversations((prev) =>
+        prev.map((c) => {
+          if (c.id !== activeIdRef.current) return c;
+          const next = updater(c.messages);
+          return {
+            ...c,
+            messages: next,
+            updatedAt: new Date(),
+            title: deriveTitle(next),
+          };
+        })
+      );
+    },
+    []
+  );
+
+  // Persist every change to the conversation bundle.
+  useEffect(() => {
+    saveConversations(conversations);
+  }, [conversations]);
+
+  // Keep a valid active conversation selected (e.g. after a delete).
+  useEffect(() => {
+    if (conversations.length === 0) return;
+    if (!conversations.some((c) => c.id === activeId)) {
+      setActiveId(conversations[0].id);
+    }
+  }, [conversations, activeId]);
 
   // The quantization to use for an entry on this device: the per-model choice
   // from the evaluated catalog, or a freshly computed best dtype.
@@ -272,7 +349,7 @@ function App() {
 
         case 'token':
           currentResponseRef.current += payload as string;
-          setMessages((prev) => {
+          updateActiveMessages((prev) => {
             const updated = [...prev];
             const lastIdx = updated.length - 1;
             if (
@@ -378,13 +455,13 @@ function App() {
       if (!entry) return;
 
       const userMessage: ChatMessage = {
-        id: generateMessageId(),
+        id: generateId('msg'),
         content: text,
         sender: 'user',
         timestamp: new Date(),
       };
 
-      const assistantMessageId = generateMessageId();
+      const assistantMessageId = generateId('msg');
       const aiPlaceholder: ChatMessage = {
         id: assistantMessageId,
         content: '',
@@ -392,7 +469,7 @@ function App() {
         timestamp: new Date(),
       };
 
-      setMessages((prev) => [...prev, userMessage, aiPlaceholder]);
+      updateActiveMessages((prev) => [...prev, userMessage, aiPlaceholder]);
       setIsTyping(true);
       currentResponseRef.current = '';
       currentResponseIdRef.current = assistantMessageId;
@@ -408,7 +485,69 @@ function App() {
 
       workerRef.current.postMessage({ type: 'generate', payload: generatePayload });
     },
-    [status, isTyping]
+    [status, isTyping, updateActiveMessages]
+  );
+
+  // ---- Conversation management ------------------------------------------------
+
+  const handleNewConversation = useCallback(() => {
+    const conv = createConversation();
+    setConversations((prev) => [conv, ...prev]);
+    setActiveId(conv.id);
+  }, []);
+
+  const handleSelectConversation = useCallback((id: string) => {
+    setActiveId(id);
+  }, []);
+
+  const handleDeleteConversation = useCallback((id: string) => {
+    setConversations((prev) => {
+      const next = prev.filter((c) => c.id !== id);
+      return next.length > 0 ? next : [createConversation()];
+    });
+  }, []);
+
+  // ---- Export / import (.lino) -----------------------------------------------
+
+  const handleExport = useCallback(() => {
+    const text = serializeBundle(conversations);
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'model-in-browser-chats.lino';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, [conversations]);
+
+  const handleImportClick = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleImportFile = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = '';
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const imported = parseBundle(text);
+        if (imported.length === 0) {
+          setStatusText('Import failed: no conversations found in that file');
+          return;
+        }
+        setConversations(imported);
+        setActiveId(imported[0].id);
+        setStatusText(
+          `Imported ${imported.length} conversation${imported.length === 1 ? '' : 's'}`
+        );
+      } catch {
+        setStatusText('Import failed: could not read that file');
+      }
+    },
+    []
   );
 
   const getStatusIndicatorClass = () => {
@@ -428,59 +567,142 @@ function App() {
   const loadedName = loadedEntryRef.current?.name ?? 'a model';
 
   return (
-    <ChatProviderProvider defaultProvider="chatscope">
-      <div className="app-container">
-        <header className="header">
-          <h1>Models in Browser</h1>
-          <p>
-            Small AI language models running entirely on your device — WebGPU
-            accelerated when available, WebAssembly otherwise
-          </p>
-          <ChatProviderSelector />
-        </header>
+    <ChatProviderProvider defaultProvider="formal-ai">
+      <div className="app-shell">
+        <aside className="sidebar" data-testid="sidebar">
+          <div className="sidebar-section sidebar-brand">
+            <h1>Models in Browser</h1>
+            <p>
+              Small AI language models running entirely on your device — WebGPU
+              accelerated when available, WebAssembly otherwise
+            </p>
+          </div>
 
-        <ModelSelector
-          models={evaluated}
-          caps={caps}
-          selectedId={selectedId}
-          loadedId={loadedId}
-          busy={status === 'loading'}
-          onSelect={handleSelectModel}
-        />
-
-        <div className="status-bar">
-          <div className={`status-indicator ${getStatusIndicatorClass()}`} />
-          <span data-testid="status-text">{statusText}</span>
-          {status === 'error' && (
-            <button className="load-button" onClick={handleRetry}>
-              Retry Load
+          <div className="sidebar-section">
+            <button
+              type="button"
+              className="sidebar-new-chat"
+              data-testid="new-conversation"
+              onClick={handleNewConversation}
+            >
+              + New chat
             </button>
-          )}
-        </div>
+            <ul className="conversation-list" data-testid="conversation-list">
+              {conversations.map((c) => (
+                <li
+                  key={c.id}
+                  className={`conversation-entry${c.id === activeId ? ' is-active' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className="conversation-entry-button"
+                    onClick={() => handleSelectConversation(c.id)}
+                    aria-pressed={c.id === activeId}
+                    title={c.title || 'New conversation'}
+                  >
+                    <span className="conversation-title">
+                      {c.title || 'New conversation'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="conversation-delete"
+                    aria-label="Delete conversation"
+                    title="Delete conversation"
+                    onClick={() => handleDeleteConversation(c.id)}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
 
-        {progress && (
-          <div className="progress-bar">
-            <div
-              className="progress-bar-fill"
-              style={{ width: `${progress.progress}%` }}
+          <div className="sidebar-section">
+            <ChatProviderSelector />
+          </div>
+
+          <div className="sidebar-section sidebar-models">
+            <ModelSelector
+              models={evaluated}
+              caps={caps}
+              selectedId={selectedId}
+              loadedId={loadedId}
+              busy={status === 'loading'}
+              onSelect={handleSelectModel}
             />
           </div>
-        )}
 
-        <div className="chat-container">
-          <ChatContainer
-            messages={messages}
-            isTyping={isTyping}
-            isDisabled={isDisabled}
-            onSendMessage={handleSend}
-            statusText={statusText}
-          />
-        </div>
+          <div className="sidebar-section sidebar-data">
+            <div className="sidebar-data-buttons">
+              <button
+                type="button"
+                className="data-button"
+                data-testid="export-button"
+                onClick={handleExport}
+                title="Download all conversations as a Links Notation (.lino) file"
+              >
+                ⬇ Export
+              </button>
+              <button
+                type="button"
+                className="data-button"
+                data-testid="import-button"
+                onClick={handleImportClick}
+                title="Import conversations from a Links Notation (.lino) file"
+              >
+                ⬆ Import
+              </button>
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".lino,text/plain"
+              onChange={handleImportFile}
+              style={{ display: 'none' }}
+              data-testid="import-input"
+            />
+            <p className="sidebar-data-note">
+              All chat data is stored in your browser as Links Notation (.lino).
+            </p>
+          </div>
+        </aside>
 
-        <p className="model-info">
-          Running {loadedName} | No data sent to servers | All processing happens
-          locally
-        </p>
+        <main className="chat-main">
+          <div className="status-bar">
+            <div className={`status-indicator ${getStatusIndicatorClass()}`} />
+            <span data-testid="status-text">{statusText}</span>
+            {status === 'error' && (
+              <button className="load-button" onClick={handleRetry}>
+                Retry Load
+              </button>
+            )}
+          </div>
+
+          {progress && (
+            <div className="progress-bar">
+              <div
+                className="progress-bar-fill"
+                style={{ width: `${progress.progress}%` }}
+              />
+            </div>
+          )}
+
+          <div className="chat-container">
+            <ChatContainer
+              messages={messages}
+              isTyping={isTyping}
+              isDisabled={isDisabled}
+              onSendMessage={handleSend}
+              statusText={statusText}
+            />
+          </div>
+
+          <p className="model-info">
+            Running {loadedName} | No data sent to servers | All processing
+            happens locally
+          </p>
+        </main>
       </div>
     </ChatProviderProvider>
   );

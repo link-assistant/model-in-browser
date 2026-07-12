@@ -238,7 +238,15 @@ export function evaluateFitForDtype(
 ): ModelFit {
   const budget = budgetFor(entry, caps);
   const usesWebGpu = entry.webgpu && caps.webGpuAdapter;
-  const runtimeBytes = estimateRuntimeBytes(entry, dtype);
+  // ORT's WASM backend also keeps allocator/graph memory inside the wasm32
+  // heap. Account for that backend-specific headroom on top of the model/KV
+  // estimate; without it, ~1.5B models are incorrectly advertised as runnable
+  // near the browser's practical 2 GiB limit and can terminate with Aborted().
+  const wasmHeapOverhead =
+    entry.engine === 'transformers' && !usesWebGpu ? 1.8 : 1;
+  const runtimeBytes = Math.round(
+    estimateRuntimeBytes(entry, dtype) * wasmHeapOverhead
+  );
   const dlBytes = downloadBytes(entry, dtype);
   const budgetFraction = runtimeBytes / budget;
 
@@ -297,7 +305,7 @@ export function pickBestDtype(
   if (entry.engine !== 'transformers' || entry.variants.length === 0) {
     return undefined;
   }
-  const available = entry.variants.map((v) => v.dtype);
+  const available = entry.variants.map((variant) => variant.dtype);
   // Highest quality first.
   const byQuality = [...DTYPE_ORDER].reverse().filter((d) => available.includes(d));
 
@@ -312,9 +320,11 @@ export function pickBestDtype(
   }
   if (tight) return tight;
 
-  // Nothing fits — return the smallest (most compressed) variant.
-  const smallest = [...DTYPE_ORDER].filter((d) => available.includes(d));
-  return smallest[0] ?? available[0];
+  // Nothing fits — return the smallest actual artifact. Quantization labels do
+  // not guarantee file-size order (some q4 graphs are larger than q8).
+  return [...entry.variants]
+    .filter((variant) => available.includes(variant.dtype))
+    .sort((a, b) => a.bytes - b.bytes)[0]?.dtype;
 }
 
 /**

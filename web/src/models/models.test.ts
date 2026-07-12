@@ -185,6 +185,27 @@ describe('device fit estimation', () => {
     expect(small).toBe('q4f16');
   });
 
+  it('does not advertise Qwen 2.5 1.5B as runnable in the WASM heap', () => {
+    const entry = getModelById('qwen2.5-1.5b-instruct')!;
+    const cpu = makeCaps({
+      webGpuAdapter: false,
+      memoryBudgetBytes: 2 * GB,
+    });
+
+    expect(pickBestDtype(entry, cpu)).toBe('q4f16');
+    expect(evaluateFit(entry, cpu).level).toBe('too-large');
+  });
+
+  it('keeps q4f16 available when a usable WebGPU adapter exists', () => {
+    const entry = getModelById('qwen2.5-1.5b-instruct')!;
+    const gpu = makeCaps({
+      webGpuAdapter: true,
+      gpuBudgetBytes: 2 * GB,
+    });
+
+    expect(pickBestDtype(entry, gpu)).toBe('q4f16');
+  });
+
   it('uses the GPU budget when the model and device support WebGPU', () => {
     const entry = getModelById('smollm2-135m-instruct')!;
     const caps = makeCaps({

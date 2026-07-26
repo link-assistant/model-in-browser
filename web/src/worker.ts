@@ -81,6 +81,8 @@ export interface LoadPayload {
   dtype?: Dtype;
   /** Preferred execution device. */
   device?: 'webgpu' | 'wasm';
+  /** Whether this exact model/dtype fits the WASM heap if WebGPU fails. */
+  allowWasmFallback?: boolean;
 
   // --- candle engine ---
   modelUrl?: string;
@@ -385,6 +387,11 @@ async function loadTransformersModel(payload: LoadPayload): Promise<void> {
   } catch (err) {
     // WebGPU can fail at pipeline-build time on some adapters — fall back to WASM.
     if (requested === 'webgpu') {
+      if (payload.allowWasmFallback === false) {
+        throw new Error(
+          `WebGPU could not load the ${dtype} model, and it is too large for the WASM/CPU fallback on this device.`
+        );
+      }
       postMessage({
         type: 'status',
         payload: 'WebGPU unavailable — falling back to CPU (WASM)...',

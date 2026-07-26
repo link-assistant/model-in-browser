@@ -16,6 +16,8 @@ import {
 } from './models/catalog';
 import {
   detectDeviceCapabilities,
+  evaluateFitForDtype,
+  fitsDevice,
   pickBestDtype,
   formatBytes,
   type DeviceCapabilities,
@@ -241,12 +243,17 @@ function App() {
         const caps = capsRef.current;
         const device: 'webgpu' | 'wasm' =
           entry.webgpu && caps?.webGpuAdapter ? 'webgpu' : 'wasm';
+        const dtype = chosenDtypeFor(entry);
+        const cpuCaps = caps ? { ...caps, webGpuAdapter: false } : null;
         loadPayload = {
           engine: 'transformers',
           repo: entry.repo,
           revision: entry.revision,
-          dtype: chosenDtypeFor(entry),
+          dtype,
           device,
+          allowWasmFallback:
+            cpuCaps !== null &&
+            fitsDevice(evaluateFitForDtype(entry, cpuCaps, dtype)),
           ortBase: resolveOrtBase(),
         };
       } else {

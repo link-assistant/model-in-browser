@@ -5,6 +5,7 @@
 [package]
 name = "smollm2-wasm"
 version = "0.1.0"
+publish = false
 edition = "2021"
 description = "SmolLM2 inference compiled to WebAssembly for browser-based LLM"
 license = "Unlicense"

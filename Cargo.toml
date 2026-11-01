@@ -8,6 +8,7 @@ resolver = "2"
 [package]
 name = "model-in-browser"
 version = "0.1.0"
+publish = false
 edition = "2021"
 description = "Browser-based LLM inference using SmolLM2 and WebAssembly"
 readme = "README.md"
